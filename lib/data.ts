@@ -5306,6 +5306,12 @@ export async function resolveMacrosForRateProduct(args: {
   item: string;
   brand?: string;
   searchRow?: SearchProductRow | null;
+  /**
+   * When false, skip the FatSecret name-based guess and only use a picked search row or a
+   * verified catalog entry. Barcode scans pass false: the product name comes from a barcode
+   * database, so a fuzzy name match can attach the wrong product's nutrition.
+   */
+  allowFatSecretGuess?: boolean;
 }): Promise<RateMacroFormState> {
   const item = String(args.item ?? '').trim();
   const brand = String(args.brand ?? '').trim();
@@ -5346,6 +5352,8 @@ export async function resolveMacrosForRateProduct(args: {
       return fromCurated;
     }
   }
+
+  if (args.allowFatSecretGuess === false) return { ...EMPTY_RATE_MACRO_FORM };
 
   const query = buildFatSecretSearchQuery(item, brand);
   if (query.length < 2) {

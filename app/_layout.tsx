@@ -128,6 +128,7 @@ export default function RootLayout() {
             />
             <Stack.Screen name="user/[username]" options={{ headerShown: false }} />
             <Stack.Screen name="leaderboard" options={{ headerShown: false }} />
+            <Stack.Screen name="admin-duplicates" options={{ headerShown: false }} />
             <Stack.Screen name="post/[postId]" options={{ headerShown: false }} />
             <Stack.Screen name="product/detail" options={{ headerShown: false }} />
             <Stack.Screen

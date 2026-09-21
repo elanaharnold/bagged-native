@@ -192,9 +192,12 @@ export default function RateScreen() {
     prefilledNote?: string;
     /** 'want' opens the want-to-try flow already pointed at the prefilled product (barcode scanner). */
     prefilledIntent?: string;
+    /** 'scan' when the product came from a barcode: never guess nutrition from a fuzzy name match. */
+    prefilledSource?: string;
     isWantToTry?: string;
     wantToTryRadarPostId?: string;
   }>();
+  const fromScan = params.prefilledSource === 'scan';
   const isWantToTryParam = params.isWantToTry === 'true';
   const wantToTryRadarPostIdParam = params.wantToTryRadarPostId ?? null;
 
@@ -274,6 +277,16 @@ export default function RateScreen() {
     setKeptExistingPhotoUrls((prev) => prev.filter((_, i) => i !== index));
   }, []);
   const [macros, setMacros] = useState<RateMacroFormState>(() => macroFormFromRouteParams(params));
+  /** Numbers we filled in for the user (not typed by them). The hint hides once they edit any field. */
+  const [autoFilledMacros, setAutoFilledMacros] = useState<RateMacroFormState | null>(() => {
+    const initial = macroFormFromRouteParams(params);
+    return rateMacroFormHasAny(initial) ? initial : null;
+  });
+  const macrosAutoFilled =
+    autoFilledMacros != null &&
+    (['cal', 'protein', 'carbs', 'fat', 'servingLabel'] as const).every(
+      (k) => macros[k] === autoFilledMacros[k]
+    );
 
   // ─── Search step ────────────────────────────────────────────────────────────
   const [query, setQuery] = useState('');
@@ -353,15 +366,17 @@ export default function RateScreen() {
       const form = await resolveMacrosForRateProduct({
         item,
         brand: selected?.brand ?? '',
+        allowFatSecretGuess: !fromScan,
       });
       if (cancelled || !rateMacroFormHasAny(form)) return;
       setMacros((prev) => (rateMacroFormHasAny(prev) ? prev : form));
+      setAutoFilledMacros((prev) => prev ?? form);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [step, selected?.name, selected?.brand, selected?.searchRow, routeMacroSig]);
+  }, [step, selected?.name, selected?.brand, selected?.searchRow, routeMacroSig, fromScan]);
 
   useEffect(() => {
     const qualifies = qualifiesHighProteinLowCalFromMacroForm(macros);
@@ -1077,6 +1092,7 @@ export default function RateScreen() {
         setSelectedStores([]);
         setSelectedDietTags([]);
         setMacros(nextMacros);
+        setAutoFilledMacros(rateMacroFormHasAny(nextMacros) ? nextMacros : null);
         setQuery(row.description);
         setResults([]);
         setStep('manual_entry');
@@ -1094,6 +1110,7 @@ export default function RateScreen() {
       setSubcategoryId(null);
       setCategory(inferredCategory);
       setMacros(nextMacros);
+      setAutoFilledMacros(rateMacroFormHasAny(nextMacros) ? nextMacros : null);
       setQuery(row.description);
       setResults([]);
       if (entryIntent === 'want') {
@@ -1764,8 +1781,12 @@ export default function RateScreen() {
                   item: selected.name,
                   brand: selected.brand,
                   searchRow: selected.searchRow,
+                  allowFatSecretGuess: !fromScan,
                 });
-                if (rateMacroFormHasAny(form)) setMacros(form);
+                if (rateMacroFormHasAny(form)) {
+                  setMacros(form);
+                  setAutoFilledMacros(form);
+                }
               }
               setStep('nutrition');
             }}
@@ -1779,6 +1800,7 @@ export default function RateScreen() {
             selected={selected}
             macros={macros}
             setMacros={setMacros}
+            autoFilledNote={macrosAutoFilled}
             selectedDietTags={selectedDietTags}
             onToggleDietTag={toggleDietTag}
             onBack={handleHeaderBack}
@@ -2478,6 +2500,7 @@ function NutritionStep({
   selected,
   macros,
   setMacros,
+  autoFilledNote,
   selectedDietTags,
   onToggleDietTag,
   onBack,
@@ -2488,6 +2511,8 @@ function NutritionStep({
   selected: SelectedProduct;
   macros: { cal: string; protein: string; carbs: string; fat: string; servingLabel: string };
   setMacros: (next: { cal: string; protein: string; carbs: string; fat: string; servingLabel: string }) => void;
+  /** True while the numbers shown were filled in automatically and the user has not changed them. */
+  autoFilledNote?: boolean;
   selectedDietTags: string[];
   onToggleDietTag: (id: string) => void;
   onBack: () => void;
@@ -2517,6 +2542,11 @@ function NutritionStep({
         Per serving — leave blank if you&apos;re not sure. We&apos;ll show pills on your rating
         when filled in.
       </Text>
+      {autoFilledNote ? (
+        <Text style={[styles.stepHint, { fontWeight: '600' }]}>
+          Filled in automatically and may not match your package. Check it against the label.
+        </Text>
+      ) : null}
       <View style={styles.macrosGrid}>
         <View style={styles.macrosCell}>
           <Text style={styles.macrosLabel}>Calories</Text>

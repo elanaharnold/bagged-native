@@ -25,9 +25,11 @@ import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
 import { TextField } from '@/components/bagged/text-field';
 import { AVATAR_COLORS } from '@/constants/avatar-colors';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
+import { fetchDuplicateCandidates } from '@/lib/admin-duplicates';
 import { requestAccountDeletionRpc, updatePassword } from '@/lib/auth';
 import {
   fetchProfileById,
+  isAdminUsername,
   isUsernameAvailable,
   updateOwnProfile,
   type ProfileRow,
@@ -40,7 +42,9 @@ const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, signOut } = useAuth();
+  const { userId, signOut, username: authUsername } = useAuth();
+  const isAdmin = isAdminUsername(authUsername);
+  const [duplicateCount, setDuplicateCount] = useState<number | null>(null);
   const { showFeedDietBar, showMacroNutrition, setShowFeedDietBar, setShowMacroNutrition } =
     useDisplaySettings();
 
@@ -82,6 +86,23 @@ export default function SettingsScreen() {
         cancelled = true;
       };
     }, [userId])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAdmin) return;
+      let cancelled = false;
+      fetchDuplicateCandidates()
+        .then((rows) => {
+          if (!cancelled) setDuplicateCount(rows.length);
+        })
+        .catch(() => {
+          if (!cancelled) setDuplicateCount(null);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [isAdmin])
   );
 
   const dirty = profile
@@ -302,6 +323,27 @@ export default function SettingsScreen() {
                 style={[styles.saveBtn, (!dirty || saving) && styles.saveBtnDisabled]}>
                 <Text style={styles.saveBtnText}>{saving ? 'Saving…' : 'Save changes'}</Text>
               </Pressable>
+
+              {isAdmin ? (
+                <>
+                  <Text style={[styles.sectionLabel, styles.sectionGap]}>Admin</Text>
+                  <View style={styles.card}>
+                    <Pressable style={styles.cardRow} onPress={() => router.push('/admin-duplicates')}>
+                      <View style={styles.cardRowText}>
+                        <Text style={styles.cardTitle}>Potential duplicates</Text>
+                        <Text style={styles.cardSub}>
+                          {duplicateCount == null
+                            ? 'Review products that may be the same'
+                            : duplicateCount === 0
+                              ? 'Nothing to review'
+                              : `${duplicateCount} to review`}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={20} color={BaggedColors.muted} />
+                    </Pressable>
+                  </View>
+                </>
+              ) : null}
 
               <Text style={[styles.sectionLabel, styles.sectionGap]}>Display</Text>
               <View style={styles.card}>

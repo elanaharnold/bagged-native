@@ -19,18 +19,28 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PrimaryButton } from '@/components/bagged/primary-button';
 import { SearchResultRow } from '@/components/bagged/search-result-row';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
+import { subcategoryForRow } from '@/constants/categories';
 import { useDebounce } from '@/hooks/use-debounce';
 import {
+  findSimilarRankedPost,
   linkBarcodeToProduct,
   lookupBarcode,
   normalizeScan,
   rateParamsForSearchRow,
+  reportSameProduct,
   type BarcodeSource,
   type ScannedBarcode,
 } from '@/lib/barcode';
-import { searchProducts, searchRowBrand, type SearchProductRow } from '@/lib/data';
+import {
+  productDescriptionKey,
+  searchProducts,
+  searchRowBrand,
+  type RankedPostRow,
+  type SearchProductRow,
+} from '@/lib/data';
 import { formatProductDisplayName } from '@/lib/format';
 import { logEvent } from '@/lib/log-event';
+import { useAuth } from '@/providers/auth-provider';
 
 type Phase =
   | { name: 'scanning' }
@@ -43,11 +53,21 @@ type Phase =
       /** Save the barcode → product link when the user moves on (Open Food Facts hits). */
       needsLink: boolean;
     }
+  | {
+      /** The scanned product looks like one the user already ranked: ask before assuming. */
+      name: 'confirm_existing';
+      scan: ScannedBarcode;
+      source: BarcodeSource;
+      row: SearchProductRow;
+      needsLink: boolean;
+      existing: RankedPostRow;
+    }
   | { name: 'not_found'; scan: ScannedBarcode }
   | { name: 'error'; scan: ScannedBarcode; message: string };
 
 export default function ScanScreen() {
   const router = useRouter();
+  const { userId } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<Phase>({ name: 'scanning' });
   const [torch, setTorch] = useState(false);
@@ -91,13 +111,24 @@ export default function ScanScreen() {
     if (!mountedRef.current) return;
     if (result.kind === 'match') {
       logEvent('scan_matched', { source: result.source });
-      setPhase({
-        name: 'match',
-        scan,
-        source: result.source,
-        row: result.row,
-        needsLink: result.source === 'open_food_facts',
-      });
+      const needsLink = result.source === 'open_food_facts';
+      // Before offering to rate it, check whether the user already ranked this product
+      // under a slightly different name (search results and barcode databases word things differently).
+      const existing = userId ? await findSimilarRankedPost(userId, result.row) : null;
+      if (!mountedRef.current) return;
+      if (existing) {
+        logEvent('scan_already_ranked_prompt', { source: result.source });
+        setPhase({
+          name: 'confirm_existing',
+          scan,
+          source: result.source,
+          row: result.row,
+          needsLink,
+          existing,
+        });
+        return;
+      }
+      setPhase({ name: 'match', scan, source: result.source, row: result.row, needsLink });
     } else if (result.kind === 'none') {
       logEvent('scan_not_found', { barcode: scan.gtin });
       setPhase({ name: 'not_found', scan });
@@ -105,7 +136,7 @@ export default function ScanScreen() {
       logEvent('scan_lookup_error', { barcode: scan.gtin });
       setPhase({ name: 'error', scan, message: result.message });
     }
-  }, []);
+  }, [userId]);
 
   const onScanned = useCallback(
     (result: BarcodeScanningResult) => {
@@ -134,6 +165,43 @@ export default function ScanScreen() {
     },
     [phase, router]
   );
+
+  /**
+   * "Yes, same product": the scanner's name is the one we keep on the barcode, the user's post is
+   * left alone, and a report goes to the admin who merges the two names.
+   */
+  const confirmExisting = useCallback(() => {
+    if (phase.name !== 'confirm_existing') return;
+    logEvent('scan_already_ranked_confirmed', { source: phase.source });
+    if (phase.needsLink) void linkBarcodeToProduct({ gtin: phase.scan.gtin, row: phase.row });
+    void reportSameProduct({ gtin: phase.scan.gtin, scanned: phase.row, existing: phase.existing });
+    const post = phase.existing;
+    router.replace({
+      pathname: '/product/detail',
+      params: {
+        item: post.item,
+        brand: post.product_brand ?? '',
+        category: post.category,
+        subcategory: subcategoryForRow(post),
+        store: post.store ?? '',
+        descriptionKey:
+          post.description_key ?? productDescriptionKey(post.item, post.product_brand),
+      },
+    });
+  }, [phase, router]);
+
+  /** "No, different product": carry on with the scanned product as before. */
+  const rejectExisting = useCallback(() => {
+    if (phase.name !== 'confirm_existing') return;
+    logEvent('scan_already_ranked_rejected', { source: phase.source });
+    setPhase({
+      name: 'match',
+      scan: phase.scan,
+      source: phase.source,
+      row: phase.row,
+      needsLink: phase.needsLink,
+    });
+  }, [phase]);
 
   const pickFromSearch = useCallback(
     (row: SearchProductRow) => {
@@ -240,7 +308,7 @@ export default function ScanScreen() {
           </Pressable>
         </View>
 
-        {phase.name !== 'match' ? (
+        {phase.name !== 'match' && phase.name !== 'confirm_existing' ? (
           <View style={styles.frameWrap} pointerEvents="none">
             <View style={styles.frame} />
             <Text style={styles.hint}>
@@ -249,6 +317,31 @@ export default function ScanScreen() {
             {phase.name === 'looking_up' ? (
               <ActivityIndicator color={BaggedColors.white} style={styles.spinner} />
             ) : null}
+          </View>
+        ) : null}
+
+        {phase.name === 'confirm_existing' ? (
+          <View style={styles.matchCard}>
+            <Text style={styles.matchLabel}>Is this the same product?</Text>
+            <Text style={styles.matchMeta}>You scanned</Text>
+            <Text style={styles.matchName}>{formatProductDisplayName(phase.row.description)}</Text>
+            {searchRowBrand(phase.row) ? (
+              <Text style={styles.matchBrand}>{searchRowBrand(phase.row)}</Text>
+            ) : null}
+            <Text style={[styles.matchMeta, styles.existingGap]}>You already ranked</Text>
+            <Text style={styles.matchName}>{formatProductDisplayName(phase.existing.item)}</Text>
+            {String(phase.existing.product_brand ?? '').trim() ? (
+              <Text style={styles.matchBrand}>{String(phase.existing.product_brand).trim()}</Text>
+            ) : null}
+            <View style={styles.matchActions}>
+              <PrimaryButton label="Yes, same product" onPress={confirmExisting} />
+              <PrimaryButton
+                label="No, it's different"
+                variant="secondary"
+                onPress={rejectExisting}
+              />
+              <PrimaryButton label="Scan another" variant="ghost" onPress={rescan} />
+            </View>
           </View>
         ) : null}
 
@@ -426,6 +519,9 @@ const styles = StyleSheet.create({
     fontFamily: BaggedFonts.body,
     fontSize: 12,
     color: BaggedColors.muted,
+  },
+  existingGap: {
+    marginTop: 14,
   },
   matchActions: { marginTop: 16, gap: 8 },
   attribution: {

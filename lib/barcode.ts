@@ -1,10 +1,13 @@
 import {
   curatedRowToSearchProductRow,
+  getUserRankings,
+  isRadarOnlyDbRow,
   productDescriptionKey,
   rateMacroFormFromNumbers,
   rateMacroFormHasAny,
   rateMacroFormToPrefillParams,
   searchRowBrand,
+  type RankedPostRow,
   type SearchProductRow,
 } from '@/lib/data';
 import { supabase } from '@/lib/supabase';
@@ -257,6 +260,8 @@ export function rateParamsForSearchRow(
   const params: Record<string, string> = {
     prefilledItem: row.description,
     prefilledBrand: searchRowBrand(row),
+    // Tells the rate screen not to guess nutrition from a fuzzy name match.
+    prefilledSource: 'scan',
   };
   const category = cleanText(row.foodCategory);
   if (category) params.prefilledCategory = category;
@@ -271,4 +276,199 @@ export function rateParamsForSearchRow(
   });
   if (rateMacroFormHasAny(macros)) Object.assign(params, rateMacroFormToPrefillParams(macros));
   return params;
+}
+
+// ─── "Have I already ranked this?" ────────────────────────────────────────────
+
+const MATCH_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'of', 'with', 'in', 'style', 'flavor', 'flavored', 'flavour']);
+
+function foldText(value: unknown): string {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Lowercase letters and digits only: "Egg Life" and "Egglife" both become "egglife". */
+function squash(value: unknown): string {
+  return foldText(value).replace(/[^a-z0-9]/g, '');
+}
+
+function wordsOf(value: unknown): string[] {
+  return foldText(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function singular(token: string): string {
+  return token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token;
+}
+
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    edits++;
+    if (edits > 1) return false;
+    if (a.length === b.length) {
+      i++;
+      j++;
+    } else if (a.length > b.length) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+/** Same word, allowing plurals and a one-letter typo on longer words (fettuccine / fettuccini). */
+function tokensMatch(a: string, b: string): boolean {
+  const x = singular(a);
+  const y = singular(b);
+  if (x === y) return true;
+  return x.length >= 6 && y.length >= 6 && withinOneEdit(x, y);
+}
+
+/** Item words with the brand and filler words removed. */
+function itemTokens(item: string, brand: string): string[] {
+  const brandSquashed = squash(brand);
+  const brandWords = new Set(wordsOf(brand));
+  return wordsOf(item).filter(
+    (t) => !MATCH_STOPWORDS.has(t) && t !== brandSquashed && !brandWords.has(t)
+  );
+}
+
+function compareBrands(a: string, b: string): { compatible: boolean; exact: boolean } {
+  const x = squash(a);
+  const y = squash(b);
+  if (!x || !y) return { compatible: true, exact: false };
+  if (x === y) return { compatible: true, exact: true };
+  if (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x))) {
+    return { compatible: true, exact: false };
+  }
+  return { compatible: false, exact: false };
+}
+
+/**
+ * How likely two product names are the same item, 0 (no) to 2 (identical key).
+ * Deliberately loose; the scanner always asks the user to confirm before acting on it.
+ */
+export function similarityToRankedPost(
+  scanned: { item: string; brand: string; descriptionKey?: string | null },
+  ranked: { item: string; brand: string; descriptionKey?: string | null }
+): number {
+  const scannedKey = cleanText(scanned.descriptionKey).toLowerCase();
+  const rankedKey = cleanText(ranked.descriptionKey).toLowerCase();
+  if (scannedKey && rankedKey && scannedKey === rankedKey) return 2;
+  if (
+    productDescriptionKey(scanned.item, scanned.brand) ===
+    productDescriptionKey(ranked.item, ranked.brand)
+  ) {
+    return 2;
+  }
+
+  const brands = compareBrands(scanned.brand, ranked.brand);
+  if (!brands.compatible) return 0;
+
+  const a = itemTokens(scanned.item, scanned.brand);
+  const b = itemTokens(ranked.item, ranked.brand);
+  if (a.length === 0 || b.length === 0) return 0;
+
+  const [small, big] = a.length <= b.length ? [a, b] : [b, a];
+  const matched = small.filter((t) => big.some((u) => tokensMatch(t, u))).length;
+  const containment = matched / small.length;
+  if (containment < 0.75) return 0;
+  // A single shared word is only enough when the brand matches exactly and it is the whole name.
+  if (matched < 2 && !(brands.exact && matched === small.length)) return 0;
+  return containment;
+}
+
+/**
+ * The viewer's own ranked post that looks like the scanned product, if any.
+ * Best-effort: returns null on any error so scanning is never blocked.
+ */
+export async function findSimilarRankedPost(
+  userId: string,
+  row: SearchProductRow
+): Promise<RankedPostRow | null> {
+  try {
+    const posts = await getUserRankings(userId);
+    const scanned = {
+      item: row.description,
+      brand: searchRowBrand(row),
+      descriptionKey: row.descriptionKey,
+    };
+    let best: RankedPostRow | null = null;
+    let bestScore = 0;
+    for (const post of posts) {
+      if (isRadarOnlyDbRow(post)) continue;
+      const score = similarityToRankedPost(scanned, {
+        item: post.item,
+        brand: String(post.product_brand ?? ''),
+        descriptionKey: post.description_key,
+      });
+      if (score > bestScore) {
+        best = post;
+        bestScore = score;
+      }
+    }
+    return best;
+  } catch (err) {
+    if (__DEV__) console.warn('findSimilarRankedPost:', err);
+    return null;
+  }
+}
+
+/**
+ * The user confirmed the scanned product is one they already ranked under a different name.
+ * Files a report so the admin can merge the two names (the scanned name becomes the shared one).
+ * Best-effort: never throws.
+ */
+export async function reportSameProduct(args: {
+  gtin: string;
+  scanned: SearchProductRow;
+  existing: RankedPostRow;
+}): Promise<void> {
+  try {
+    const scannedItem = cleanText(args.scanned.description).slice(0, 200);
+    const scannedBrand = cleanText(searchRowBrand(args.scanned)).slice(0, 100);
+    const scannedKey = (
+      cleanText(args.scanned.descriptionKey) || productDescriptionKey(scannedItem, scannedBrand)
+    )
+      .toLowerCase()
+      .slice(0, 300);
+    const existingItem = cleanText(args.existing.item).slice(0, 200);
+    const existingBrand = cleanText(args.existing.product_brand).slice(0, 100);
+    const existingKey = (
+      cleanText(args.existing.description_key) || productDescriptionKey(existingItem, existingBrand)
+    )
+      .toLowerCase()
+      .slice(0, 300);
+    if (!scannedItem || !scannedKey || !existingKey || scannedKey === existingKey) return;
+
+    const { error } = await supabase.from('duplicate_reports').insert({
+      barcode: args.gtin,
+      scanned_key: scannedKey,
+      scanned_item: scannedItem,
+      scanned_brand: scannedBrand,
+      existing_key: existingKey,
+      existing_item: existingItem,
+      existing_brand: existingBrand,
+    });
+    if (error && error.code !== '23505' && __DEV__) {
+      console.warn('reportSameProduct:', error.message);
+    }
+  } catch (err) {
+    if (__DEV__) console.warn('reportSameProduct:', err);
+  }
 }
