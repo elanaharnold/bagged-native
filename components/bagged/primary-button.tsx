@@ -74,9 +74,9 @@ function variantStyles({
   if (variant === 'secondary') {
     return {
       bg: 'transparent',
-      border: surface === 'dark' ? 'rgba(255,255,255,0.35)' : BaggedColors.dark,
+      border: BaggedColors.border,
       borderWidth: 1.5,
-      label: surface === 'dark' ? '#FFFFFF' : BaggedColors.dark,
+      label: surface === 'dark' ? BaggedColors.white : BaggedColors.dark,
     };
   }
   if (surface === 'dark') {
@@ -88,10 +88,10 @@ function variantStyles({
     };
   }
   return {
-    bg: disabled ? BaggedColors.border : BaggedColors.dark,
+    bg: disabled ? 'rgba(0, 0, 0, 0.22)' : BaggedColors.accent,
     border: 'transparent',
     borderWidth: 0,
-    label: '#FAFAF8',
+    label: BaggedColors.white,
   };
 }
 

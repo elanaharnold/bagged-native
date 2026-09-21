@@ -1,5 +1,6 @@
 import { forwardRef, useState } from 'react';
 import {
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -22,6 +23,10 @@ type TextFieldProps = Omit<TextInputProps, 'style'> & {
   /** When true, renders a show/hide toggle on the right edge. */
   togglePassword?: boolean;
   prefix?: string;
+  /** Prevents iOS/Android autofill yellow overlay on non-credential fields (e.g. product search). */
+  disableAutofill?: boolean;
+  /** Extra styles merged onto the underlying `TextInput`. */
+  inputStyle?: TextInputProps['style'];
 };
 
 export const TextField = forwardRef<TextInput, TextFieldProps>(function TextField(
@@ -34,6 +39,8 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
     togglePassword,
     secureTextEntry,
     prefix,
+    disableAutofill = false,
+    inputStyle,
     ...rest
   },
   ref
@@ -41,6 +48,14 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
   const [showSecret, setShowSecret] = useState(false);
   const palette = variant === 'dark' ? darkPalette : lightPalette;
   const hasError = Boolean(errorText);
+  const autofillOff =
+    disableAutofill && !togglePassword
+      ? {
+          textContentType: 'none' as const,
+          autoComplete: 'off' as const,
+          ...(Platform.OS === 'android' ? { importantForAutofill: 'no' as const } : {}),
+        }
+      : {};
 
   return (
     <View style={styles.wrapper}>
@@ -69,8 +84,11 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
         <TextInput
           ref={ref}
           {...rest}
+          {...autofillOff}
           secureTextEntry={togglePassword ? !showSecret : secureTextEntry}
           placeholderTextColor={palette.placeholder}
+          selectionColor={variant === 'dark' ? 'rgba(255,255,255,0.45)' : undefined}
+          cursorColor={variant === 'dark' ? BaggedColors.white : undefined}
           style={[
             styles.input,
             {
@@ -80,6 +98,7 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
               paddingLeft: prefix ? 36 : 14,
               paddingRight: togglePassword ? 56 : 14,
             },
+            inputStyle,
           ]}
         />
         {togglePassword ? (
@@ -106,20 +125,21 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
 
 const lightPalette = {
   labelColor: BaggedColors.muted,
-  inputBg: '#FFFFFF',
+  inputBg: BaggedColors.white,
   inputBorder: BaggedColors.border,
   inputText: BaggedColors.dark,
-  placeholder: 'rgba(46,46,44,0.32)',
+  placeholder: 'rgba(0, 0, 0, 0.32)',
   helperColor: BaggedColors.muted,
-  prefixColor: 'rgba(46,46,44,0.32)',
+  prefixColor: 'rgba(0, 0, 0, 0.32)',
 };
 
+/** For dark surfaces only (e.g. sign-up, onboarding). Do not use on cream backgrounds. */
 const darkPalette = {
   labelColor: 'rgba(255,255,255,0.55)',
-  inputBg: 'rgba(255,255,255,0.08)',
+  inputBg: '#1A1A1A',
   inputBorder: 'rgba(255,255,255,0.15)',
-  inputText: '#FFFFFF',
-  placeholder: 'rgba(255,255,255,0.3)',
+  inputText: BaggedColors.white,
+  placeholder: 'rgba(255,255,255,0.35)',
   helperColor: 'rgba(255,255,255,0.45)',
   prefixColor: 'rgba(255,255,255,0.35)',
 };

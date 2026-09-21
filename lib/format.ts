@@ -1,3 +1,5 @@
+import { retailStoresForRow } from '@/constants/grocery';
+
 /** Relative-time string for a post timestamp; mirrors the web `formatPostTime`. */
 export function formatPostTime(createdAt: string | number | Date | null | undefined): string {
   if (!createdAt) return 'just now';
@@ -38,13 +40,11 @@ export function formatProductDisplayName(raw: unknown): string {
     .join(' ');
 }
 
-/** Stores attached to a row: prefer the array; otherwise wrap the single store. */
+/** Retailers for a row — never includes product brand; uses shared grocery sanitization. */
 export function storeListForRow(row: {
   stores?: string[] | null;
   store?: string | null;
+  product_brand?: string | null;
 }): string[] {
-  const fromArr = Array.isArray(row?.stores) ? row.stores.filter(Boolean) : [];
-  if (fromArr.length > 0) return fromArr as string[];
-  if (row?.store) return [row.store];
-  return [];
+  return retailStoresForRow(row);
 }

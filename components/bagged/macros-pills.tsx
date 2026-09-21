@@ -1,9 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { BaggedFonts } from '@/constants/bagged-theme';
-import { type PostMacros } from '@/lib/data';
-
-type Pill = { value: string; bg: string; color: string };
+import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
+import { formatMacroNumber, macroFieldIsSet, type PostMacros } from '@/lib/data';
 
 /**
  * Renders the four macros as compact monospace pills, matching the web
@@ -13,16 +11,24 @@ type Pill = { value: string; bg: string; color: string };
 export function MacrosPills({
   macros,
   size = 'md',
+  centered = false,
+  compact = false,
 }: {
   macros: PostMacros | null | undefined;
   size?: 'sm' | 'md';
+  centered?: boolean;
+  compact?: boolean;
 }) {
   if (!macros) return null;
-  const cells: Pill[] = [];
-  if (macros.cal != null) cells.push({ value: `${Math.round(macros.cal)} cal`, bg: '#F4F2EC', color: '#555555' });
-  if (macros.protein != null) cells.push({ value: `${Math.round(macros.protein)}g pro`, bg: '#E6F7EE', color: '#1A8C4E' });
-  if (macros.carbs != null) cells.push({ value: `${Math.round(macros.carbs)}g carbs`, bg: '#FFF3E0', color: '#F57C00' });
-  if (macros.fat != null) cells.push({ value: `${Math.round(macros.fat)}g fat`, bg: '#E1F5FE', color: '#0288D1' });
+  const cells: string[] = [];
+  if (macroFieldIsSet(macros.cal))
+    cells.push(`${formatMacroNumber(Number(macros.cal))} cal`);
+  if (macroFieldIsSet(macros.protein))
+    cells.push(`${formatMacroNumber(Number(macros.protein))}g pro`);
+  if (macroFieldIsSet(macros.carbs))
+    cells.push(`${formatMacroNumber(Number(macros.carbs))}g carbs`);
+  if (macroFieldIsSet(macros.fat))
+    cells.push(`${formatMacroNumber(Number(macros.fat))}g fat`);
   if (cells.length === 0) return null;
 
   const fontSize = size === 'sm' ? 10 : 11;
@@ -30,19 +36,18 @@ export function MacrosPills({
   const padH = size === 'sm' ? 6 : 8;
 
   return (
-    <View style={styles.row}>
-      {cells.map((p) => (
+    <View style={[styles.row, centered && styles.rowCentered, compact && styles.rowCompact]}>
+      {cells.map((value) => (
         <View
-          key={p.value}
+          key={value}
           style={[
             styles.pill,
             {
-              backgroundColor: p.bg,
               paddingVertical: padV,
               paddingHorizontal: padH,
             },
           ]}>
-          <Text style={[styles.pillText, { color: p.color, fontSize }]}>{p.value}</Text>
+          <Text style={[styles.pillText, { fontSize }]}>{value}</Text>
         </View>
       ))}
     </View>
@@ -56,11 +61,23 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 8,
   },
+  rowCentered: {
+    justifyContent: 'center',
+    alignSelf: 'center',
+    width: '100%',
+  },
+  rowCompact: {
+    marginTop: 0,
+    gap: 4,
+  },
   pill: {
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: BaggedColors.dietTag,
   },
   pillText: {
     fontFamily: BaggedFonts.body,
     fontWeight: '700',
+    color: BaggedColors.dietTag,
   },
 });

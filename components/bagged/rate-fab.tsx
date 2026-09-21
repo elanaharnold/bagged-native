@@ -1,14 +1,21 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BaggedColors, BaggedFonts, BaggedLayout } from '@/constants/bagged-theme';
+import { BOTTOM_TAB_BAR_BODY_HEIGHT } from '@/components/bagged/bottom-tab-bar';
+import { BaggedColors } from '@/constants/bagged-theme';
 
-/** Floating primary CTA — web-style charcoal pill, bottom center above safe area. */
+const FAB_SIZE = 60;
+const FAB_GAP_ABOVE_TAB_BAR = 10;
+
+/** Floating primary CTA — charcoal circle with a plus icon (rate or want-to-try). */
 export function BaggedRateFab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const bottomOffset =
+    Math.max(insets.bottom, 8) + BOTTOM_TAB_BAR_BODY_HEIGHT + FAB_GAP_ABOVE_TAB_BAR;
 
   return (
     <View
@@ -16,21 +23,21 @@ export function BaggedRateFab() {
       style={[
         styles.wrap,
         {
-          paddingBottom: Math.max(insets.bottom, 10) + 8,
+          bottom: bottomOffset,
         },
       ]}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Rate an item"
+        accessibilityLabel="Add an item"
         onPress={() => {
           if (Platform.OS === 'ios') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           }
           router.push('/rate');
         }}
-        style={styles.pill}
+        style={styles.fab}
         hitSlop={8}>
-        <Text style={styles.label}>+ RATE ITEM</Text>
+        <Ionicons name="add" size={32} color={BaggedColors.white} />
       </Pressable>
     </View>
   );
@@ -41,25 +48,20 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
     alignItems: 'center',
+    zIndex: 20,
   },
-  pill: {
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: BaggedLayout.pillRadius,
-    backgroundColor: BaggedColors.dark,
-    shadowColor: '#000000',
+  fab: {
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
+    backgroundColor: BaggedColors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: BaggedColors.charcoal,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.14,
     shadowRadius: 10,
     elevation: 5,
-  },
-  label: {
-    color: BaggedColors.white,
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    fontFamily: BaggedFonts.display,
   },
 });

@@ -1,42 +1,49 @@
 /**
- * Bagged design tokens — deep poster red chrome (native), cream/white surfaces.
+ * Bagged design tokens — šolski časopis palette: punchy green, white, black ink.
  */
 
+const POSTER_GREEN = '#097D3C';
+const POSTER_GREEN_RGB = '9, 125, 60';
+const SURFACE = '#FFFFFF';
+
 export const BaggedColors = {
-  /** Poster red — top tab chrome only */
-  bg: '#D12229',
-  /** Warm paper — fills that should stay “cream” on top of red */
-  cream: '#FFF8F0',
-  /** Main area below tab bar — soft white */
-  content: '#FAFAFA',
-  card: '#FFFFFF',
-  ink: '#2D2D2D',
-  /** Primary text / active fills — alias of ink for older screens */
-  dark: '#2D2D2D',
-  muted: '#6B6B6B',
-  border: 'rgba(45, 45, 45, 0.12)',
-  borderSoft: 'rgba(45, 45, 45, 0.08)',
-  borderStrong: 'rgba(45, 45, 45, 0.22)',
-  accent: '#E07A3A',
-  accentPale: '#FFF4EC',
-  /** Score ring / emphasis — high (≥9) */
-  scoreHigh: '#4CAF50',
-  /** Score ring — mid (≥7) */
-  scoreMid: '#FFC107',
-  /** Alias for mid score / highlights */
-  gold: '#FFC107',
-  /** Score ring — low */
-  scoreLow: '#E07A3A',
-  /** Success / toggle-on — aligned with score green */
-  green: '#4CAF50',
-  heart: '#C85A5A',
-  red: '#C54B4B',
-  shadow: 'rgba(45, 45, 45, 0.08)',
+  /** Poster green — header, accents, welcome screen */
+  blue: POSTER_GREEN,
+  /** White — surfaces and wordmark on green */
+  cream: SURFACE,
+  black: '#000000',
+  charcoal: '#000000',
   white: '#FFFFFF',
-  /** Label / icon on red (`bg`) */
-  onBg: '#FFFFFF',
-  onBgMuted: 'rgba(255,255,255,0.78)',
-  borderOnBg: 'rgba(255,255,255,0.38)',
+  /** Legacy alias — on-green text */
+  green: '#FFFFFF',
+  red: POSTER_GREEN,
+  cherry: POSTER_GREEN,
+
+  bg: SURFACE,
+  content: SURFACE,
+  card: SURFACE,
+  ink: '#000000',
+  dark: '#000000',
+  muted: 'rgba(0, 0, 0, 0.55)',
+  border: '#000000',
+  borderSoft: 'rgba(0, 0, 0, 0.2)',
+  borderStrong: '#000000',
+  accent: POSTER_GREEN,
+  accentPale: `rgba(${POSTER_GREEN_RGB}, 0.12)`,
+  /** Selected green-tinted pills — noticeably darker than `accentPale`. */
+  accentPaleActive: `rgba(${POSTER_GREEN_RGB}, 0.32)`,
+  dietTag: POSTER_GREEN,
+  dietTagBg: `rgba(${POSTER_GREEN_RGB}, 0.08)`,
+  dietTagBgActive: `rgba(${POSTER_GREEN_RGB}, 0.32)`,
+  scoreHigh: POSTER_GREEN,
+  scoreMid: '#D9C566',
+  scoreLow: '#C33C23',
+  gold: '#D9C566',
+  heart: POSTER_GREEN,
+  shadow: 'rgba(0, 0, 0, 0.12)',
+  onBg: POSTER_GREEN,
+  onBgMuted: `rgba(${POSTER_GREEN_RGB}, 0.55)`,
+  borderOnBg: '#000000',
 } as const;
 
 export const BaggedFonts = {
@@ -50,14 +57,12 @@ export const BaggedLayout = {
   screenPadding: 16,
   cardRadius: 14,
   pillRadius: 999,
-  /** Card shadow — subtle elevation matching web */
   shadowCard: {
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 3,
   } as const,
-  /** Extra space above home indicator so lists clear the floating + RATE ITEM control */
-  rateFabListInset: 72,
+  rateFabListInset: 120,
 } as const;

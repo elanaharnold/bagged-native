@@ -12,8 +12,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AutoFitText } from '@/components/bagged/auto-fit-text';
+import { ExpandableText } from '@/components/bagged/expandable-text';
 import { Avatar } from '@/components/bagged/avatar';
+import { UsernameLink } from '@/components/bagged/username-link';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
 import { fetchActivityNotifications, fetchProfileById, type ActivityNotification } from '@/lib/data';
 import { formatPostTime } from '@/lib/format';
@@ -82,7 +83,7 @@ export default function NotificationsModalScreen() {
       <View style={styles.headerRow}>
         <View style={styles.headerMain}>
           <Text style={styles.brand}>Notifications</Text>
-          <Text style={styles.sub}>Likes, comments, and new followers</Text>
+          <Text style={styles.sub}>Likes, comments, replies, and new followers</Text>
         </View>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeBtn} accessibilityLabel="Close">
           <Ionicons name="close" size={28} color={BaggedColors.onBg} />
@@ -108,7 +109,7 @@ export default function NotificationsModalScreen() {
             <View style={styles.centered}>
               <Text style={styles.emptyTitle}>You&apos;re all caught up</Text>
               <Text style={styles.emptyBody}>
-                When someone likes or comments on your posts, or follows you, it&apos;ll show up here.
+                When someone likes or comments on your posts, replies to you, or follows you, it&apos;ll show up here.
               </Text>
             </View>
           }
@@ -123,21 +124,41 @@ export default function NotificationsModalScreen() {
                 } else if (item.postId) {
                   router.push({
                     pathname: '/comments/[postId]',
-                    params: { postId: item.postId, postItem: item.postItemPreview ?? '' },
+                    params: {
+                      postId: item.postId,
+                      postItem: item.postItemPreview ?? '',
+                      highlightCommentId:
+                        item.kind === 'comment' || item.kind === 'comment_reply'
+                          ? item.commentId ?? ''
+                          : '',
+                    },
                   });
                 }
               }}
               style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
-              <Avatar
-                char={(item.actorUsername || '?').charAt(0).toUpperCase()}
-                color={item.actorAvatar ?? BaggedColors.accent}
-                size={44}
-              />
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: '/user/[username]',
+                    params: { username: item.actorUsername },
+                  })
+                }
+                hitSlop={6}>
+                <Avatar
+                  char={(item.actorUsername || '?').charAt(0).toUpperCase()}
+                  color={item.actorAvatar ?? BaggedColors.accent}
+                  size={44}
+                />
+              </Pressable>
               <View style={styles.body}>
                 <Text style={styles.line}>
                   {item.kind === 'like' ? (
                     <>
-                      <Text style={styles.bold}>@{item.actorUsername}</Text> liked your ranking
+                      <UsernameLink
+                        username={item.actorUsername}
+                        style={styles.bold}
+                        verified={item.actorVerifiedAmbassador}
+                      /> liked your ranking
                       {item.postItemPreview ? (
                         <>
                           {' '}
@@ -147,23 +168,41 @@ export default function NotificationsModalScreen() {
                     </>
                   ) : item.kind === 'comment' ? (
                     <>
-                      <Text style={styles.bold}>@{item.actorUsername}</Text> commented on{' '}
+                      <UsernameLink
+                        username={item.actorUsername}
+                        style={styles.bold}
+                        verified={item.actorVerifiedAmbassador}
+                      /> commented on{' '}
                       {item.postItemPreview ? (
                         <Text style={styles.itemPreview}>“{item.postItemPreview.slice(0, 40)}”</Text>
                       ) : (
                         'your post'
                       )}
                     </>
+                  ) : item.kind === 'comment_reply' ? (
+                    <>
+                      <UsernameLink
+                        username={item.actorUsername}
+                        style={styles.bold}
+                        verified={item.actorVerifiedAmbassador}
+                      /> replied to your
+                      comment
+                    </>
                   ) : (
                     <>
-                      <Text style={styles.bold}>@{item.actorUsername}</Text> started following you
+                      <UsernameLink
+                        username={item.actorUsername}
+                        style={styles.bold}
+                        verified={item.actorVerifiedAmbassador}
+                      /> started following
+                      you
                     </>
                   )}
                 </Text>
                 {item.bodyPreview ? (
-                  <AutoFitText style={styles.snippet} numberOfLines={2}>
+                  <ExpandableText style={styles.snippet} numberOfLines={2}>
                     {item.bodyPreview}
-                  </AutoFitText>
+                  </ExpandableText>
                 ) : null}
                 <Text style={styles.time}>{formatPostTime(item.createdAt)}</Text>
               </View>

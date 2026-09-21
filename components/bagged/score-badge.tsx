@@ -1,11 +1,14 @@
 import { StyleSheet, Text } from 'react-native';
 
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
+import { clampBaggedScore } from '@/lib/ranking';
 
-function scoreTierColor(score: number): string {
-  if (score >= 9) return BaggedColors.scoreHigh;
-  if (score >= 7) return BaggedColors.scoreMid;
-  return BaggedColors.scoreLow;
+/** Color for a numeric score — red below 4, yellow 4–7, green above 7. */
+export function scoreDisplayColor(score: number): string {
+  const safe = clampBaggedScore(score);
+  if (safe < 4) return BaggedColors.scoreLow;
+  if (safe > 7) return BaggedColors.scoreHigh;
+  return BaggedColors.scoreMid;
 }
 
 type ScoreBadgeProps = {
@@ -25,14 +28,16 @@ type ScoreBadgeProps = {
  * clipping values like 10.0 in tiny rings).
  */
 export function ScoreBadge({ score, rating, size = 40 }: ScoreBadgeProps) {
-  const value = Number(score ?? rating ?? 0);
-  const safe = Number.isFinite(value) ? value : 0;
-  const color = scoreTierColor(safe);
+  const safe = clampBaggedScore(Number(score ?? rating ?? 0));
+  const color = scoreDisplayColor(safe);
   /** Map legacy "badge size" to font size: 14→~18, 44→~28 */
   const fontSize = Math.min(32, Math.max(15, Math.round(12 + (size / 44) * 16)));
 
   return (
-    <Text style={[styles.scoreText, { fontSize, color }]} allowFontScaling>
+    <Text
+      style={[styles.scoreText, { fontSize, color }]}
+      numberOfLines={1}
+      allowFontScaling={false}>
       {safe.toFixed(1)}
     </Text>
   );
@@ -41,5 +46,6 @@ export function ScoreBadge({ score, rating, size = 40 }: ScoreBadgeProps) {
 const styles = StyleSheet.create({
   scoreText: {
     fontFamily: BaggedFonts.display,
+    flexShrink: 0,
   },
 });

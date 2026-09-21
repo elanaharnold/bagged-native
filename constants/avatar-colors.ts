@@ -1,13 +1,12 @@
-/** Mirrors web `AVATAR_COLORS` in `bagged/src/App.jsx`. */
+/** Avatar swatch fills — saturated poster tones that pair with white initials. */
 export const AVATAR_COLORS = [
-  '#E8210A',
-  '#1A8C4E',
-  '#0288D1',
-  '#7B4FD4',
-  '#F57C00',
-  '#C2185B',
-  '#388E3C',
-  '#0097A7',
-  '#5D4037',
-  '#546E7A',
+  '#097D3C', // brand green
+  '#000000', // black
+  '#1B6EC2', // blue
+  '#6B4FD4', // purple
+  '#00897B', // teal
+  '#C33C23', // coral
+  '#C9951A', // gold
+  '#D44D8C', // magenta
+  '#E06C1A', // orange
 ] as const;

@@ -9,14 +9,19 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
   View,
 } from 'react-native';
+
+import {
+  DELETE_ACCOUNT_CONFIRMATION_PHRASE,
+  DeleteAccountConfirmationModal,
+} from '@/components/bagged/delete-account-confirmation-modal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
 import { TextField } from '@/components/bagged/text-field';
 import { AVATAR_COLORS } from '@/constants/avatar-colors';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
@@ -53,9 +58,8 @@ export default function SettingsScreen() {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
   const [passwordErr, setPasswordErr] = useState<string | null>(null);
-
-  const [manualSyncing, setManualSyncing] = useState(false);
-  const [manualSyncMessage, setManualSyncMessage] = useState('');
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -162,22 +166,6 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleManualSync = async () => {
-    if (!userId) return;
-    setManualSyncing(true);
-    setManualSyncMessage('');
-    try {
-      await fetchProfileById(userId);
-      setManualSyncMessage('Synced from Supabase.');
-      setTimeout(() => setManualSyncMessage(''), 1800);
-    } catch (err) {
-      console.warn('manual sync:', err);
-      setManualSyncMessage('Sync failed. Try again.');
-    } finally {
-      setManualSyncing(false);
-    }
-  };
-
   const confirmSignOut = () => {
     Alert.alert('Sign out?', 'You can log back in any time.', [
       { text: 'Cancel', style: 'cancel' },
@@ -191,36 +179,29 @@ export default function SettingsScreen() {
     ]);
   };
 
-  const confirmDeleteAccount = () => {
-    Alert.alert(
-      'Delete account?',
-      'This removes your account data from Bagged where supported. You will be signed out.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await requestAccountDeletionRpc();
-              await signOut();
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : '';
-              const missing =
-                msg.includes('Could not find') ||
-                msg.includes('does not exist') ||
-                msg.includes('PGRST202');
-              Alert.alert(
-                'Could not delete automatically',
-                missing
-                  ? 'Account deletion is not available from the app yet. Contact support or use the website.'
-                  : msg || 'Something went wrong. Try again later.'
-              );
-            }
-          },
-        },
-      ]
-    );
+  const runDeleteAccount = async () => {
+    if (deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await requestAccountDeletionRpc(DELETE_ACCOUNT_CONFIRMATION_PHRASE);
+      setDeleteModalOpen(false);
+      await signOut();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      const missing =
+        msg.includes('Could not find') ||
+        msg.includes('does not exist') ||
+        msg.includes('PGRST202') ||
+        msg.includes('confirmation');
+      Alert.alert(
+        'Could not delete account',
+        missing
+          ? 'Account deletion is not available yet. Make sure migration 063 is applied, or contact support.'
+          : msg || 'Something went wrong. Try again later.'
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   const appVersion = Constants.expoConfig?.version ?? '—';
@@ -239,9 +220,9 @@ export default function SettingsScreen() {
       </View>
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.flex}>
-        <ScrollView
+        <KeyboardFormScroll
           contentContainerStyle={[
             styles.scrollContent,
             { paddingBottom: 60 + Math.max(insets.bottom, 12) },
@@ -254,37 +235,43 @@ export default function SettingsScreen() {
           ) : (
             <>
               <Text style={styles.sectionLabel}>Edit profile</Text>
-              <Text style={styles.fieldLabel}>Username</Text>
-              <TextField
-                value={username}
-                onChangeText={(v) => {
-                  setUsername(v);
-                  if (savedMsg) setSavedMsg(null);
-                  if (errorMsg) setErrorMsg(null);
-                }}
-                placeholder="username"
-                autoCapitalize="none"
-                autoCorrect={false}
-                prefix="@"
-              />
-              <Text style={styles.fieldHelp}>3–20 chars: letters, numbers, _ or .</Text>
 
-              <Text style={styles.fieldLabel}>Bio</Text>
-              <TextField
-                value={bio}
-                onChangeText={(v) => {
-                  setBio(v);
-                  if (savedMsg) setSavedMsg(null);
-                  if (errorMsg) setErrorMsg(null);
-                }}
-                placeholder="Tell people what you bag"
-                multiline
-                numberOfLines={3}
-                autoCapitalize="sentences"
-              />
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Username</Text>
+                <TextField
+                  value={username}
+                  onChangeText={(v) => {
+                    setUsername(v);
+                    if (savedMsg) setSavedMsg(null);
+                    if (errorMsg) setErrorMsg(null);
+                  }}
+                  placeholder="username"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  prefix="@"
+                />
+                <Text style={styles.fieldHelp}>3–20 chars: letters, numbers, _ or .</Text>
+              </View>
 
-              <Text style={styles.fieldLabel}>Avatar color</Text>
-              <View style={styles.colorGrid}>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Bio</Text>
+                <TextField
+                  value={bio}
+                  onChangeText={(v) => {
+                    setBio(v);
+                    if (savedMsg) setSavedMsg(null);
+                    if (errorMsg) setErrorMsg(null);
+                  }}
+                  placeholder="Tell people what you bag"
+                  multiline
+                  numberOfLines={3}
+                  autoCapitalize="sentences"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Avatar color</Text>
+                <View style={styles.colorGrid}>
                 {AVATAR_COLORS.map((c) => {
                   const active = c === avatarColor;
                   return (
@@ -303,6 +290,7 @@ export default function SettingsScreen() {
                     />
                   );
                 })}
+                </View>
               </View>
 
               {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
@@ -319,14 +307,14 @@ export default function SettingsScreen() {
               <View style={styles.card}>
                 <View style={styles.cardRow}>
                   <View style={styles.cardRowText}>
-                    <Text style={styles.cardTitle}>Diet filters on feed</Text>
-                    <Text style={styles.cardSub}>Show “All Diets” and diet pills above the feed</Text>
+                    <Text style={styles.cardTitle}>Tag filters on feed</Text>
+                    <Text style={styles.cardSub}>Show tag filters above category pills on the feed</Text>
                   </View>
                   <Switch
                     value={showFeedDietBar}
                     onValueChange={setShowFeedDietBar}
-                    trackColor={{ false: BaggedColors.border, true: '#1A8C4E' }}
-                    thumbColor="#FFFFFF"
+                    trackColor={{ false: BaggedColors.border, true: BaggedColors.accent }}
+                    thumbColor={BaggedColors.white}
                     ios_backgroundColor={BaggedColors.border}
                   />
                 </View>
@@ -338,57 +326,42 @@ export default function SettingsScreen() {
                   <Switch
                     value={showMacroNutrition}
                     onValueChange={setShowMacroNutrition}
-                    trackColor={{ false: BaggedColors.border, true: '#1A8C4E' }}
-                    thumbColor="#FFFFFF"
+                    trackColor={{ false: BaggedColors.border, true: BaggedColors.accent }}
+                    thumbColor={BaggedColors.white}
                     ios_backgroundColor={BaggedColors.border}
                   />
                 </View>
               </View>
 
-              <Text style={[styles.sectionLabel, styles.sectionGap]}>Data</Text>
-              <View style={styles.card}>
-                <View style={styles.cardRow}>
-                  <View style={styles.cardRowText}>
-                    <Text style={styles.cardTitle}>Sync now</Text>
-                    <Text style={styles.cardSub}>Pull latest Supabase edits immediately</Text>
-                  </View>
-                  <Pressable
-                    onPress={handleManualSync}
-                    disabled={manualSyncing}
-                    style={[styles.syncBtn, manualSyncing && styles.syncBtnDisabled]}>
-                    <Text style={styles.syncBtnText}>{manualSyncing ? 'Syncing…' : 'Sync'}</Text>
-                  </Pressable>
-                </View>
-                {manualSyncMessage ? (
-                  <Text style={styles.syncMsg}>{manualSyncMessage}</Text>
-                ) : null}
-              </View>
-
               <Text style={[styles.sectionLabel, styles.sectionGap]}>Security</Text>
-              <Text style={styles.fieldLabel}>New password</Text>
-              <TextField
-                value={newPassword}
-                onChangeText={(t) => {
-                  setNewPassword(t);
-                  setPasswordErr(null);
-                  setPasswordMsg(null);
-                }}
-                placeholder="At least 6 characters"
-                secureTextEntry
-                autoCapitalize="none"
-              />
-              <Text style={styles.fieldLabel}>Confirm password</Text>
-              <TextField
-                value={confirmPassword}
-                onChangeText={(t) => {
-                  setConfirmPassword(t);
-                  setPasswordErr(null);
-                  setPasswordMsg(null);
-                }}
-                placeholder="Repeat password"
-                secureTextEntry
-                autoCapitalize="none"
-              />
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>New password</Text>
+                <TextField
+                  value={newPassword}
+                  onChangeText={(t) => {
+                    setNewPassword(t);
+                    setPasswordErr(null);
+                    setPasswordMsg(null);
+                  }}
+                  placeholder="At least 6 characters"
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Confirm password</Text>
+                <TextField
+                  value={confirmPassword}
+                  onChangeText={(t) => {
+                    setConfirmPassword(t);
+                    setPasswordErr(null);
+                    setPasswordMsg(null);
+                  }}
+                  placeholder="Repeat password"
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
               {passwordErr ? <Text style={styles.errorText}>{passwordErr}</Text> : null}
               {passwordMsg ? <Text style={styles.savedText}>{passwordMsg}</Text> : null}
               <Pressable
@@ -398,15 +371,12 @@ export default function SettingsScreen() {
                 <Text style={styles.secondaryBtnText}>{passwordBusy ? 'Updating…' : 'Update password'}</Text>
               </Pressable>
 
-              <Pressable onPress={confirmDeleteAccount} style={styles.deleteOutlineBtn}>
-                <Text style={styles.deleteOutlineText}>Delete account</Text>
-              </Pressable>
-
               <Text style={[styles.sectionLabel, styles.sectionGap]}>About</Text>
               <View style={styles.card}>
                 {[
-                  { label: 'Nutrition data', value: 'USDA FoodData Central' },
-                  { label: 'Product search', value: 'USDA Branded Foods DB' },
+                  { label: 'Nutrition data', value: 'FatSecret' },
+                  { label: 'Product search', value: 'FatSecret' },
+                  { label: 'Barcode data', value: 'Open Food Facts' },
                   { label: 'Version', value: `${appVersion} beta` },
                 ].map((row, i, arr) => (
                   <View
@@ -422,10 +392,30 @@ export default function SettingsScreen() {
                 <Ionicons name="log-out-outline" size={20} color={BaggedColors.red} />
                 <Text style={styles.signOutText}>Log out</Text>
               </Pressable>
+
+              <Text style={[styles.sectionLabel, styles.sectionGap, styles.dangerLabel]}>
+                Danger zone
+              </Text>
+              <Text style={styles.dangerHint}>
+                Permanently deletes your login, profile, and every ranking. This cannot be undone.
+              </Text>
+              <Pressable
+                onPress={() => setDeleteModalOpen(true)}
+                style={styles.deleteOutlineBtn}>
+                <Text style={styles.deleteOutlineText}>Delete account permanently…</Text>
+              </Pressable>
             </>
           )}
-        </ScrollView>
+        </KeyboardFormScroll>
       </KeyboardAvoidingView>
+
+      <DeleteAccountConfirmationModal
+        visible={deleteModalOpen}
+        username={profile?.username ?? username}
+        busy={deleteBusy}
+        onClose={() => setDeleteModalOpen(false)}
+        onConfirm={() => void runDeleteAccount()}
+      />
     </View>
   );
 }
@@ -474,30 +464,41 @@ const styles = StyleSheet.create({
     color: BaggedColors.muted,
     textTransform: 'uppercase',
     letterSpacing: 1.1,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   sectionGap: {
     marginTop: 28,
+  },
+  fieldGroup: {
+    marginBottom: 20,
+  },
+  dangerLabel: {
+    color: BaggedColors.accent,
+  },
+  dangerHint: {
+    fontFamily: BaggedFonts.body,
+    fontSize: 13,
+    lineHeight: 18,
+    color: BaggedColors.muted,
+    marginBottom: 4,
   },
   fieldLabel: {
     fontFamily: BaggedFonts.body,
     fontSize: 12,
     fontWeight: '600',
     color: BaggedColors.dark,
-    marginBottom: 6,
-    marginTop: 14,
+    marginBottom: 8,
   },
   fieldHelp: {
     fontFamily: BaggedFonts.body,
     fontSize: 11,
     color: BaggedColors.muted,
-    marginTop: 4,
+    marginTop: 6,
   },
   colorGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginTop: 4,
   },
   colorSwatch: {
     width: 36,
@@ -513,17 +514,19 @@ const styles = StyleSheet.create({
     fontFamily: BaggedFonts.body,
     fontSize: 12,
     color: BaggedColors.accent,
-    marginTop: 12,
+    marginTop: 4,
+    marginBottom: 4,
   },
   savedText: {
     fontFamily: BaggedFonts.body,
     fontSize: 12,
-    color: BaggedColors.green,
-    marginTop: 12,
+    color: BaggedColors.accent,
+    marginTop: 4,
+    marginBottom: 4,
     fontWeight: '600',
   },
   saveBtn: {
-    marginTop: 18,
+    marginTop: 8,
     paddingVertical: 14,
     paddingHorizontal: 18,
     borderRadius: 12,
@@ -537,7 +540,7 @@ const styles = StyleSheet.create({
     fontFamily: BaggedFonts.body,
     fontSize: 14,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: BaggedColors.green,
   },
   card: {
     backgroundColor: BaggedColors.card,
@@ -575,32 +578,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: BaggedColors.muted,
   },
-  syncBtn: {
-    flexShrink: 0,
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 13,
-    backgroundColor: BaggedColors.dark,
-  },
-  syncBtnDisabled: {
-    opacity: 0.7,
-  },
-  syncBtnText: {
-    fontFamily: BaggedFonts.body,
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  syncMsg: {
-    marginTop: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    fontFamily: BaggedFonts.body,
-    fontSize: 12,
-    color: BaggedColors.muted,
-  },
   secondaryBtn: {
-    marginTop: 12,
+    marginTop: 8,
     paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1.5,

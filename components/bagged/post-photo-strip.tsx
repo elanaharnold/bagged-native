@@ -1,15 +1,19 @@
-import { Image } from 'expo-image';
-import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Image, type ImageContentFit } from 'expo-image';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { FlatList } from 'react-native-gesture-handler';
 
+import { ExpandedPhotoModal } from '@/components/bagged/expanded-photo-modal';
 import { BaggedColors } from '@/constants/bagged-theme';
-import { normalizePhotoUrls } from '@/lib/data';
+import { isPublicPostPhotoStorageUrl, normalizePhotoUrls } from '@/lib/data';
 
 type PostPhotoStripProps = {
   urls?: string[] | null;
   maxHeight?: number;
   /** Optional — Supabase private buckets often need the user JWT on the image request. */
   imageHeaders?: Record<string, string>;
+  /** Tap a photo to open full-screen viewer. Default true. */
+  expandable?: boolean;
 };
 
 function httpImageUrls(raw: unknown): string[] {
@@ -23,79 +27,198 @@ function httpImageUrls(raw: unknown): string[] {
   });
 }
 
-export function PostPhotoStrip({ urls, maxHeight = 200, imageHeaders }: PostPhotoStripProps) {
-  const list = useMemo(() => httpImageUrls(urls), [urls]);
-  const [hidden, setHidden] = useState<Set<number>>(() => new Set());
+const MAX_RETRIES = 2;
+
+function PhotoImage({
+  uri,
+  headers,
+  style,
+  contentFit = 'contain',
+  onGiveUp,
+}: {
+  uri: string;
+  headers?: Record<string, string>;
+  style: object;
+  contentFit?: ImageContentFit;
+  onGiveUp: () => void;
+}) {
+  const [retries, setRetries] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    setHidden(new Set());
+    setRetries(0);
+    setFailed(false);
+  }, [uri]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleError = useCallback(() => {
+    if (retries < MAX_RETRIES) {
+      timerRef.current = setTimeout(() => {
+        setRetries((r) => r + 1);
+      }, 800 * (retries + 1));
+    } else {
+      setFailed(true);
+      onGiveUp();
+    }
+  }, [retries, onGiveUp]);
+
+  if (failed) {
+    return null;
+  }
+
+  const source = isPublicPostPhotoStorageUrl(uri)
+    ? { uri: `${uri}${retries > 0 ? `#r=${retries}` : ''}` }
+    : {
+        uri: `${uri}${retries > 0 ? `#r=${retries}` : ''}`,
+        ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+      };
+
+  return (
+    <Image
+      key={`${uri}:${retries}`}
+      source={source}
+      style={style}
+      contentFit={contentFit}
+      cachePolicy="memory-disk"
+      onError={handleError}
+    />
+  );
+}
+
+export function PostPhotoStrip({
+  urls,
+  maxHeight = 200,
+  imageHeaders,
+  expandable = true,
+}: PostPhotoStripProps) {
+  const list = useMemo(() => httpImageUrls(urls), [urls]);
+  const [failed, setFailed] = useState<Set<number>>(() => new Set());
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const tileSize = maxHeight;
+
+  useEffect(() => {
+    setFailed(new Set());
   }, [list.join('|')]);
 
-  if (list.length === 0) return null;
+  const markFailed = useCallback((index: number) => {
+    setFailed((prev) => {
+      if (prev.has(index)) return prev;
+      const next = new Set(prev);
+      next.add(index);
+      return next;
+    });
+  }, []);
 
-  const src = (uri: string) =>
-    imageHeaders && Object.keys(imageHeaders).length > 0 ? { uri, headers: imageHeaders } : { uri };
+  const visible = list.map((u, i) => ({ u, i })).filter(({ i }) => !failed.has(i));
+  const visibleUrls = visible.map(({ u }) => u);
 
-  if (list.length === 1) {
-    if (hidden.has(0)) return null;
+  const openExpanded = useCallback(
+    (visibleIndex: number) => {
+      if (!expandable || visibleIndex < 0) return;
+      setExpandedIndex(visibleIndex);
+    },
+    [expandable]
+  );
+
+  if (list.length === 0 || visible.length === 0) return null;
+
+  const modal = expandable ? (
+    <ExpandedPhotoModal
+      visible={expandedIndex != null}
+      urls={visibleUrls}
+      initialIndex={expandedIndex ?? 0}
+      imageHeaders={imageHeaders}
+      onClose={() => setExpandedIndex(null)}
+    />
+  ) : null;
+
+  if (visible.length === 1) {
+    const { u, i } = visible[0];
     return (
-      <View style={[styles.singleWrap, { height: maxHeight }]}>
-        <Image
-          source={src(list[0])}
-          style={styles.singleImage}
-          contentFit="cover"
-          onError={() => setHidden((s) => new Set(s).add(0))}
-        />
-      </View>
+      <>
+        <Pressable
+          disabled={!expandable}
+          onPress={() => openExpanded(0)}
+          style={[styles.singleWrap, { width: tileSize, height: tileSize }]}>
+          <PhotoImage
+            uri={u}
+            headers={imageHeaders}
+            style={styles.singleImage}
+            contentFit="cover"
+            onGiveUp={() => markFailed(i)}
+          />
+        </Pressable>
+        {modal}
+      </>
     );
   }
 
-  const visible = list.map((u, i) => ({ u, i })).filter(({ i }) => !hidden.has(i));
-  if (visible.length === 0) return null;
-
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.row}>
-      {visible.map(({ u, i }) => (
-        <View key={`${i}:${u}`} style={[styles.thumb, { height: maxHeight }]}>
-          <Image
-            source={src(u)}
-            style={styles.thumbImage}
-            contentFit="cover"
-            onError={() => setHidden((s) => new Set(s).add(i))}
-          />
-        </View>
-      ))}
-    </ScrollView>
+    <>
+      <FlatList
+        horizontal
+        data={visible}
+        keyExtractor={({ u, i }) => `${i}:${u}`}
+        showsHorizontalScrollIndicator={false}
+        nestedScrollEnabled
+        directionalLockEnabled
+        keyboardShouldPersistTaps="handled"
+        style={[styles.carousel, { height: tileSize }]}
+        contentContainerStyle={styles.row}
+        renderItem={({ item: { u, i }, index }) => (
+          <Pressable
+            disabled={!expandable}
+            onPress={() => openExpanded(index)}
+            style={[styles.thumb, { width: tileSize, height: tileSize }]}>
+            <PhotoImage
+              uri={u}
+              headers={imageHeaders}
+              style={styles.thumbImage}
+              onGiveUp={() => markFailed(i)}
+            />
+          </Pressable>
+        )}
+        ItemSeparatorComponent={() => <View style={styles.gap} />}
+      />
+      {modal}
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   singleWrap: {
+    alignSelf: 'center',
     marginBottom: 12,
     borderRadius: 14,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: BaggedColors.borderSoft,
-    backgroundColor: BaggedColors.card,
+    backgroundColor: BaggedColors.white,
   },
   singleImage: {
     width: '100%',
     height: '100%',
   },
+  carousel: {
+    width: '100%',
+    flexGrow: 0,
+  },
   row: {
-    gap: 8,
     paddingBottom: 12,
   },
+  gap: {
+    width: 8,
+  },
   thumb: {
-    width: 220,
     borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: BaggedColors.borderSoft,
-    backgroundColor: BaggedColors.card,
+    backgroundColor: BaggedColors.white,
   },
   thumbImage: {
     width: '100%',

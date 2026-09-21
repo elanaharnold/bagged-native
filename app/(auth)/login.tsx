@@ -4,13 +4,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
 import { PrimaryButton } from '@/components/bagged/primary-button';
 import { TextField } from '@/components/bagged/text-field';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
@@ -46,8 +47,6 @@ export default function LoginScreen() {
     try {
       await signIn({ email, password });
     } catch (err) {
-      // Match the web app's friendly fallback message — Supabase's raw error is
-      // not user-friendly ("Invalid login credentials").
       console.warn('login failed:', err);
       setLoginError('Incorrect email or password');
     } finally {
@@ -67,7 +66,7 @@ export default function LoginScreen() {
     try {
       await requestPasswordReset(em);
       setForgotNotice(
-        'Check your email for a reset link. If you don’t see it, try your spam folder.'
+        'Check your email for a reset link. Open it on this device so Bagged can finish the reset. If you don’t see it, try your spam folder.'
       );
     } catch (err) {
       const message =
@@ -80,10 +79,11 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      <StatusBar barStyle="light-content" />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.flex}>
-        <ScrollView
+        <KeyboardFormScroll
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled">
           <View style={styles.headerRow}>
@@ -95,15 +95,19 @@ export default function LoginScreen() {
               accessibilityLabel="Back">
               <Text style={styles.backText}>←</Text>
             </Pressable>
-            <Text style={styles.heading}>{mode === 'login' ? 'Log in' : 'Forgot password'}</Text>
             <View style={styles.backBtn} />
           </View>
 
-          {mode === 'forgot' ? (
-            <Text style={styles.subhead}>
-              Enter your account email and we&apos;ll send you a link to choose a new password.
+          <View style={styles.hero}>
+            <Text style={styles.heading}>
+              {mode === 'login' ? 'Log in' : 'Forgot password'}
             </Text>
-          ) : null}
+            {mode === 'forgot' ? (
+              <Text style={styles.subhead}>
+                Enter your account email and we&apos;ll send you a link to choose a new password.
+              </Text>
+            ) : null}
+          </View>
 
           <View style={styles.fields}>
             <TextField
@@ -124,32 +128,31 @@ export default function LoginScreen() {
             />
 
             {mode === 'login' ? (
-              <View style={styles.fieldSpacer}>
-                <TextField
-                  variant="dark"
-                  label="Password"
-                  labelRight={
-                    <Pressable onPress={() => setMode('forgot')} hitSlop={6}>
-                      <Text style={styles.forgotLink}>Forgot password?</Text>
-                    </Pressable>
-                  }
-                  value={password}
-                  onChangeText={(t) => {
-                    setPassword(t);
-                    setLoginError('');
-                  }}
-                  placeholder="••••••••"
-                  togglePassword
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  textContentType="password"
-                  onSubmitEditing={submitLogin}
-                />
-              </View>
+              <View style={styles.spacer} />
             ) : null}
 
-            {mode === 'login' && loginError ? (
-              <Text style={styles.errorRow}>{loginError}</Text>
+            {mode === 'login' ? (
+              <TextField
+                variant="dark"
+                label="Password"
+                labelRight={
+                  <Pressable onPress={() => setMode('forgot')} hitSlop={6}>
+                    <Text style={styles.forgotLink}>Forgot password?</Text>
+                  </Pressable>
+                }
+                value={password}
+                onChangeText={(t) => {
+                  setPassword(t);
+                  setLoginError('');
+                }}
+                placeholder="••••••••"
+                togglePassword
+                autoCapitalize="none"
+                autoCorrect={false}
+                textContentType="password"
+                errorText={loginError || null}
+                onSubmitEditing={submitLogin}
+              />
             ) : null}
 
             {mode === 'forgot' && forgotErr ? (
@@ -163,7 +166,7 @@ export default function LoginScreen() {
           <View style={styles.actions}>
             {mode === 'login' ? (
               <>
-                <PrimaryButton label="Log in" onPress={submitLogin} loading={busy} />
+                <PrimaryButton label="Log in" onPress={submitLogin} loading={busy} surface="dark" />
                 <View style={styles.spacer} />
                 <Pressable onPress={() => router.replace('/(auth)/sign-up')} hitSlop={8}>
                   <Text style={styles.swapPrompt}>
@@ -178,6 +181,7 @@ export default function LoginScreen() {
                   label="Send reset link"
                   onPress={submitForgot}
                   loading={forgotBusy}
+                  surface="dark"
                 />
                 <View style={styles.spacer} />
                 <Pressable
@@ -192,7 +196,7 @@ export default function LoginScreen() {
               </>
             )}
           </View>
-        </ScrollView>
+        </KeyboardFormScroll>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -201,7 +205,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: BaggedColors.bg,
+    backgroundColor: BaggedColors.dark,
   },
   flex: {
     flex: 1,
@@ -216,14 +220,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 28,
+    marginBottom: 24,
   },
   backBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BaggedColors.borderOnBg,
+    borderColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
@@ -231,33 +235,36 @@ const styles = StyleSheet.create({
   backText: {
     fontFamily: BaggedFonts.body,
     fontSize: 18,
-    color: BaggedColors.onBg,
+    color: BaggedColors.green,
     marginTop: -2,
+  },
+  hero: {
+    marginBottom: 32,
   },
   heading: {
     fontFamily: BaggedFonts.display,
-    fontSize: 24,
-    color: BaggedColors.onBg,
+    fontSize: 36,
+    color: BaggedColors.green,
+    letterSpacing: -0.6,
+    marginBottom: 10,
   },
   subhead: {
     fontFamily: BaggedFonts.body,
-    fontSize: 14,
-    color: BaggedColors.onBgMuted,
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.55)',
     lineHeight: 22,
-    marginBottom: 20,
   },
   fields: {
-    flex: 1,
-    gap: 4,
+    width: '100%',
   },
-  fieldSpacer: {
-    marginTop: 14,
+  spacer: {
+    height: 14,
   },
   forgotLink: {
     fontFamily: BaggedFonts.body,
     fontSize: 12,
     fontWeight: '600',
-    color: BaggedColors.onBg,
+    color: BaggedColors.green,
   },
   errorRow: {
     marginTop: 12,
@@ -269,23 +276,20 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontFamily: BaggedFonts.body,
     fontSize: 13,
-    color: BaggedColors.green,
+    color: 'rgba(255,255,255,0.85)',
     lineHeight: 18,
   },
   actions: {
-    marginTop: 24,
+    marginTop: 28,
     alignItems: 'center',
-  },
-  spacer: {
-    height: 14,
   },
   swapPrompt: {
     fontFamily: BaggedFonts.body,
     fontSize: 13,
-    color: BaggedColors.onBgMuted,
+    color: 'rgba(255,255,255,0.55)',
   },
   swapPromptEmphasis: {
-    color: BaggedColors.onBg,
+    color: BaggedColors.green,
     fontWeight: '700',
   },
 });

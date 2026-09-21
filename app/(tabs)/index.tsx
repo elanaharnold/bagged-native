@@ -1,4 +1,4 @@
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FeedCard, type FeedCardPost } from '@/components/bagged/feed-card';
+import { PostNoteEditorModal } from '@/components/bagged/post-note-editor-modal';
 import {
   ALL_CATEGORIES,
   ALL_STORES,
@@ -20,77 +21,47 @@ import {
   rowMatchesCategoryFilter,
   rowMatchesDietFilter,
   rowMatchesStoreFilter,
-  type FilterCategory,
+  rowMatchesTwoLevelCategoryFilter,
   type FilterStore,
 } from '@/components/bagged/filter-bar';
 import { BaggedColors, BaggedFonts, BaggedLayout } from '@/constants/bagged-theme';
-import { primaryGroceryStoreForKey } from '@/constants/grocery';
+import { subcategoryForRow } from '@/constants/categories';
+import { STORES, displayStoreForRow, primaryGroceryStoreForKey } from '@/constants/grocery';
 import {
-  addToWantToTry,
   getFeed,
   getUserRankings,
   getWantToTry,
   isRadarOnlyDbRow,
-  normalizeMacros,
-  normalizePhotoUrls,
   normalizedDescriptionKeyFromItem,
+  productDescriptionKey,
+  resolveProductDescriptionKey,
   rankKeyPair,
-  removeFromWantToTry,
   toggleLike,
   type FeedPostRow,
+  type WantToTryItem,
 } from '@/lib/data';
-import { setFeedRefreshListener, takePendingBringToTopPostId } from '@/lib/feed-refresh-poke';
+import { feedRowToCardPost } from '@/lib/feed-post-card';
+import { removeWantToTryWithFeed } from '@/lib/want-to-try-feed';
+import {
+  useWantToTryCaption,
+  wantToTryCaptionProductLabel,
+} from '@/hooks/use-want-to-try-caption';
+import { usePostLikersModal } from '@/hooks/use-post-likers-modal';
+import { useVerifiedAmbassadorUsernames } from '@/hooks/use-verified-ambassador-usernames';
+import { pokeFeedRefresh, setFeedPatchListener, setFeedRefreshListener, takePendingBringToTopPostId } from '@/lib/feed-refresh-poke';
+import { shareScoreCardFromFeedPost } from '@/lib/share-score-card';
 import { storeListForRow } from '@/lib/format';
 import { useDisplaySettings } from '@/providers/display-settings-provider';
 import { useAuth } from '@/providers/auth-provider';
-
-function feedRowToCardPost(
-  row: FeedPostRow,
-  viewerId: string,
-  wantSet: Set<string>,
-  rankedSet: Set<string>
-): FeedCardPost {
-  const username = row.profile?.username ?? 'unknown';
-  const stores = row.stores?.length ? row.stores : row.store ? [row.store] : [];
-  const radarOnly = row.radar_only === true;
-  const liked = row.likes.some((l) => String(l.user_id) === String(viewerId));
-  const photoUrls = normalizePhotoUrls(row.photo_urls);
-  const wantToTry = wantSet.has(rankKeyPair(row.item, primaryGroceryStoreForKey(row)));
-  const viewerHasRanked = rankedSet.has(rankKeyPair(row.item, primaryGroceryStoreForKey(row)));
-
-  return {
-    id: row.id,
-    user: username,
-    avatar: (username || '?').charAt(0).toUpperCase(),
-    avatarColor: row.profile?.avatar_color ?? BaggedColors.accent,
-    item: row.item ?? '',
-    brand: row.product_brand ?? '',
-    store: row.store ?? '',
-    stores,
-    category: row.category ?? '',
-    rating: radarOnly ? null : (row.rating ?? null),
-    note: row.note ?? '',
-    photoUrls,
-    likes: row.likes.length,
-    comments: row.commentCount ?? 0,
-    liked,
-    wantToTry,
-    radarOnly,
-    createdAt: row.created_at,
-    macros: normalizeMacros(row.macros),
-    dietTags: Array.isArray(row.diet_tags) ? row.diet_tags : null,
-    descriptionKey:
-      row.description_key != null && String(row.description_key).trim()
-        ? String(row.description_key).trim().toLowerCase()
-        : normalizedDescriptionKeyFromItem(row.item ?? ''),
-    viewerHasRanked,
-  };
-}
+import { useShareScoreCard } from '@/providers/share-score-card-provider';
 
 export default function FeedScreen() {
   const router = useRouter();
-  const { userId, session } = useAuth();
+  const navigation = useNavigation();
+  const { userId, username, session } = useAuth();
+  const { openShareScoreCard } = useShareScoreCard();
   const { showFeedDietBar, showMacroNutrition } = useDisplaySettings();
+  const verifiedUsernames = useVerifiedAmbassadorUsernames();
   const storageImageHeaders = useMemo(
     () =>
       session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
@@ -98,32 +69,73 @@ export default function FeedScreen() {
   );
   const [posts, setPosts] = useState<FeedCardPost[]>([]);
   const [wantSet, setWantSet] = useState<Set<string>>(() => new Set());
+  const [wantByKey, setWantByKey] = useState<Map<string, WantToTryItem>>(() => new Map());
   const [feedLoading, setFeedLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [storeFilter, setStoreFilter] = useState<FilterStore>(ALL_STORES);
-  const [categoryFilter, setCategoryFilter] = useState<FilterCategory>(ALL_CATEGORIES);
+  const [parentFilter, setParentFilter] = useState<string | null>(null);
+  const [subcategoryFilter, setSubcategoryFilter] = useState<string | null>(null);
   const [dietFilter, setDietFilter] = useState<string | null>(null);
   const listRef = useRef<FlatList<FeedCardPost>>(null);
+  const scrollOffsetRef = useRef(0);
+  const hasLoadedOnceRef = useRef(false);
+  const lastLoadAtRef = useRef(0);
+  const pendingWantRef = useRef<{
+    key: string;
+    primary: string;
+    item: string;
+    brand: string;
+    stores: string[];
+    category: string;
+  } | null>(null);
+  const {
+    captionTarget,
+    captionSaving,
+    requestWantToTryCaption,
+    cancelWantToTryCaption,
+    confirmWantToTryCaption,
+  } = useWantToTryCaption(userId);
+  const FEED_STALE_MS = 2 * 60 * 1000;
+
+  const storeFilterOptions = useMemo<FilterStore[]>(
+    () => [ALL_STORES, ...STORES],
+    []
+  );
 
   const filteredPosts = useMemo(
     () =>
       posts.filter(
         (p) =>
           rowMatchesStoreFilter(p, storeFilter) &&
-          rowMatchesCategoryFilter(p, categoryFilter) &&
+          rowMatchesTwoLevelCategoryFilter(p, parentFilter, subcategoryFilter) &&
           rowMatchesDietFilter({ diet_tags: p.dietTags ?? null }, dietFilter)
       ),
-    [posts, storeFilter, categoryFilter, dietFilter]
+    [posts, storeFilter, parentFilter, subcategoryFilter, dietFilter]
   );
 
   const loadFeed = useCallback(async (uid: string) => {
     setErrorMsg(null);
+    const feedErrorMessage = "Couldn't load your feed. Pull to refresh.";
     try {
+      const feedPromise = (async (): Promise<FeedPostRow[]> => {
+        try {
+          const rows = await getFeed(uid);
+          if (rows.length === 0) {
+            setErrorMsg(feedErrorMessage);
+          }
+          return rows;
+        } catch (err) {
+          console.warn('getFeed failed in loadFeed:', err);
+          setErrorMsg(feedErrorMessage);
+          return [];
+        }
+      })();
+
       // Run feed + want-to-try in parallel — both are user-scoped and the card
       // needs the want set to compute the active state.
       const [rows, wantRows, rankedRows] = await Promise.all([
-        getFeed(uid),
+        feedPromise,
         getWantToTry(uid).catch((err) => {
           console.warn('getWantToTry failed:', err);
           return [];
@@ -133,13 +145,17 @@ export default function FeedScreen() {
           return [];
         }),
       ]);
-      const nextWantSet = new Set(wantRows.map((w) => rankKeyPair(w.item, w.store)));
+      const nextWantSet = new Set(wantRows.map((w) => rankKeyPair(w.item, w.store, w.brand)));
+      const nextWantByKey = new Map(
+        wantRows.map((w) => [rankKeyPair(w.item, w.store, w.brand), w] as const)
+      );
       const rankedSet = new Set(
         rankedRows
           .filter((r) => !isRadarOnlyDbRow(r))
-          .map((r) => rankKeyPair(r.item, primaryGroceryStoreForKey(r)))
+          .map((r) => rankKeyPair(r.item, primaryGroceryStoreForKey(r), r.product_brand))
       );
       setWantSet(nextWantSet);
+      setWantByKey(nextWantByKey);
       let cards = rows.map((r) => feedRowToCardPost(r, uid, nextWantSet, rankedSet));
       const pinId = takePendingBringToTopPostId();
       let shouldScrollToTop = false;
@@ -156,10 +172,17 @@ export default function FeedScreen() {
       }
       setPosts(cards);
       if (shouldScrollToTop) {
+        scrollOffsetRef.current = 0;
         requestAnimationFrame(() => {
           listRef.current?.scrollToOffset({ offset: 0, animated: true });
         });
+      } else if (scrollOffsetRef.current > 0) {
+        const offset = scrollOffsetRef.current;
+        requestAnimationFrame(() => {
+          listRef.current?.scrollToOffset({ offset, animated: false });
+        });
       }
+      lastLoadAtRef.current = Date.now();
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Could not load your feed. Pull to retry.';
@@ -172,18 +195,54 @@ export default function FeedScreen() {
       if (!userId) {
         setPosts([]);
         setWantSet(new Set());
+        setWantByKey(new Map());
+        hasLoadedOnceRef.current = false;
+        lastLoadAtRef.current = 0;
+        return undefined;
+      }
+      const stale = Date.now() - lastLoadAtRef.current > FEED_STALE_MS;
+      if (hasLoadedOnceRef.current && !stale) {
         return undefined;
       }
       let cancelled = false;
-      setFeedLoading(true);
+      if (!hasLoadedOnceRef.current) setFeedLoading(true);
       loadFeed(userId).finally(() => {
-        if (!cancelled) setFeedLoading(false);
+        if (!cancelled) {
+          setFeedLoading(false);
+          hasLoadedOnceRef.current = true;
+        }
       });
       return () => {
         cancelled = true;
       };
     }, [userId, loadFeed])
   );
+
+  // Home tab while already on feed → scroll back to top (tab bar still emits tabPress).
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', () => {
+      if (!navigation.isFocused()) return;
+      scrollOffsetRef.current = 0;
+      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    });
+    return unsubscribe;
+  }, [navigation]);
+
+  useEffect(() => {
+    setFeedPatchListener((patch) => {
+      setPosts((prev) =>
+        prev.map((p) =>
+          String(p.id) === String(patch.postId)
+            ? {
+                ...p,
+                comments: Math.max(0, p.comments + (patch.commentsDelta ?? 0)),
+              }
+            : p
+        )
+      );
+    });
+    return () => setFeedPatchListener(null);
+  }, []);
 
   useEffect(() => {
     if (!userId) {
@@ -236,56 +295,123 @@ export default function FeedScreen() {
     async (post: FeedCardPost) => {
       if (!userId) return;
       const primary = primaryGroceryStoreForKey(post);
-      const key = rankKeyPair(post.item, primary);
+      const key = rankKeyPair(post.item, primary, post.brand);
       const wasWanted = wantSet.has(key);
+
+      if (!wasWanted) {
+        pendingWantRef.current = {
+          key,
+          primary,
+          item: post.item,
+          brand: post.brand ?? '',
+          stores: post.stores?.length ? post.stores : primary ? [primary] : [],
+          category: post.category ?? 'Snacks',
+        };
+        requestWantToTryCaption({
+          item: post.item,
+          brand: post.brand ?? '',
+          descriptionKey: post.descriptionKey,
+          stores: post.stores?.length ? post.stores : primary ? [primary] : [],
+          category: post.category ?? 'Snacks',
+          subcategory: post.subcategory ?? undefined,
+          dietTags: post.dietTags ?? undefined,
+          source: 'feed',
+        });
+        return;
+      }
 
       // Optimistic update — flip every card with the same item/store key, not
       // just this one (the same product can repeat in the feed).
       const nextWantSet = new Set(wantSet);
-      if (wasWanted) {
-        nextWantSet.delete(key);
-      } else {
-        nextWantSet.add(key);
-      }
+      nextWantSet.delete(key);
       setWantSet(nextWantSet);
       setPosts((prev) =>
-        prev.map((p) =>
-          rankKeyPair(p.item, primaryGroceryStoreForKey(p)) === key
-            ? { ...p, wantToTry: !wasWanted }
-            : p
-        )
+        prev
+          .filter((p) => {
+            const sameKey =
+              rankKeyPair(p.item, primaryGroceryStoreForKey(p), p.brand) === key;
+            const ownRadar = p.radarOnly && username && p.user === username;
+            return !(sameKey && ownRadar);
+          })
+          .map((p) =>
+            rankKeyPair(p.item, primaryGroceryStoreForKey(p), p.brand) === key
+              ? { ...p, wantToTry: false }
+              : p
+          )
       );
 
       try {
-        if (wasWanted) {
-          await removeFromWantToTry(userId, post.item, primary);
-        } else {
-          await addToWantToTry(userId, {
-            item: post.item,
-            store: primary,
-            emoji: '',
-            category: post.category ?? 'Snacks',
-            productBrand: post.brand ?? '',
-          });
-        }
+        const existing = wantByKey.get(key);
+        await removeWantToTryWithFeed(
+          userId,
+          post.item,
+          primary,
+          existing?.radarPostId,
+          { fallbackRadarPostId: post.radarOnly ? post.id : null }
+        );
+        setWantByKey((prev) => {
+          const next = new Map(prev);
+          next.delete(key);
+          return next;
+        });
+        pokeFeedRefresh();
       } catch (err) {
         console.warn('want-to-try sync failed:', err);
-        // Roll back to the pre-toggle state.
-        setWantSet(wantSet);
-        setPosts((prev) =>
-          prev.map((p) =>
-            rankKeyPair(p.item, primaryGroceryStoreForKey(p)) === key
-              ? { ...p, wantToTry: wasWanted }
-              : p
-          )
-        );
+        void loadFeed(userId);
         Alert.alert(
-          wasWanted ? 'Could not remove from Want to Try' : 'Could not save to Want to Try',
+          'Could not remove from Want to Try',
           err instanceof Error ? err.message : 'Try again in a moment.'
         );
       }
     },
-    [userId, wantSet]
+    [userId, username, wantSet, wantByKey, loadFeed, requestWantToTryCaption]
+  );
+
+  const handleCancelWantCaption = useCallback(() => {
+    pendingWantRef.current = null;
+    cancelWantToTryCaption();
+  }, [cancelWantToTryCaption]);
+
+  const handleConfirmWantCaption = useCallback(
+    async (note: string) => {
+      if (!userId) return;
+      const pending = pendingWantRef.current;
+      try {
+        const radarPostId = await confirmWantToTryCaption(note);
+        if (!radarPostId || !pending) return;
+        const { key, primary, item, brand, stores, category } = pending;
+        pendingWantRef.current = null;
+        setWantSet((prev) => new Set(prev).add(key));
+        setPosts((prev) =>
+          prev.map((p) =>
+            rankKeyPair(p.item, primaryGroceryStoreForKey(p), p.brand) === key
+              ? { ...p, wantToTry: true }
+              : p
+          )
+        );
+        setWantByKey((prev) =>
+          new Map(prev).set(key, {
+            id: `wt-${key}`,
+            item,
+            store: primary,
+            stores,
+            emoji: '',
+            category,
+            brand,
+            radarPostId,
+            note,
+          })
+        );
+        pokeFeedRefresh(radarPostId);
+      } catch (err) {
+        console.warn('want-to-try caption save failed:', err);
+        Alert.alert(
+          'Could not save to Want to Try',
+          err instanceof Error ? err.message : 'Try again in a moment.'
+        );
+      }
+    },
+    [userId, confirmWantToTryCaption]
   );
 
   const handleOpenComments = useCallback(
@@ -305,6 +431,7 @@ export default function FeedScreen() {
     },
     [router]
   );
+  const { showLikers, modal: likersModal } = usePostLikersModal(handleOpenUser);
 
   const handleOpenProduct = useCallback(
     (post: FeedCardPost) => {
@@ -317,23 +444,44 @@ export default function FeedScreen() {
           item: post.item,
           store: storeParam,
           category: String(post.category ?? '').trim(),
+          subcategory: subcategoryForRow({
+            subcategory: post.subcategory,
+            category: post.category,
+          }),
           brand: post.brand ?? '',
+          wantSource: 'feed',
           descriptionKey:
-            post.descriptionKey ?? normalizedDescriptionKeyFromItem(post.item),
+            post.descriptionKey ??
+            productDescriptionKey(post.item, post.brand),
         },
       });
     },
     [router]
   );
 
+  const handleLongPressOwnPost = useCallback(
+    (post: FeedCardPost) => {
+      if (!username) return;
+      const payload = shareScoreCardFromFeedPost(post, username);
+      if (payload) openShareScoreCard(payload);
+    },
+    [openShareScoreCard, username]
+  );
+
   return (
     <SafeAreaView style={styles.screen} edges={['bottom', 'left', 'right']}>
       <FilterBar
-        variant="text"
+        variant="dropdown"
         store={storeFilter}
-        category={categoryFilter}
+        category={ALL_CATEGORIES}
+        storeOptions={storeFilterOptions}
         onStoreChange={setStoreFilter}
-        onCategoryChange={setCategoryFilter}
+        onCategoryChange={() => {}}
+        useTwoLevelCategories
+        parentCategoryId={parentFilter}
+        subcategoryId={subcategoryFilter}
+        onParentCategoryChange={setParentFilter}
+        onSubcategoryChange={setSubcategoryFilter}
         showDietRow={showFeedDietBar}
         dietFilter={dietFilter}
         onDietChange={setDietFilter}
@@ -341,17 +489,27 @@ export default function FeedScreen() {
       <FlatList
         ref={listRef}
         data={filteredPosts}
+        nestedScrollEnabled
         keyExtractor={(item) => String(item.id)}
+        onScroll={(e) => {
+          scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}
         renderItem={({ item }) => (
           <FeedCard
             post={item}
             imageHeaders={storageImageHeaders}
             onLike={handleLike}
+            onShowLikers={(post) => showLikers(post.id)}
             onWantToTry={handleWantToTry}
             onComment={handleOpenComments}
             onPressUser={handleOpenUser}
             onPress={handleOpenProduct}
+            onLongPress={
+              username && item.user === username ? handleLongPressOwnPost : undefined
+            }
             showMacroNutrition={showMacroNutrition ?? false}
+            verifiedUsernames={verifiedUsernames}
           />
         )}
         contentContainerStyle={styles.listContent}
@@ -375,19 +533,29 @@ export default function FeedScreen() {
           ) : (
             <View style={styles.centered}>
               <Text style={styles.emptyTitle}>
-                {storeFilter !== ALL_STORES || categoryFilter !== ALL_CATEGORIES || dietFilter != null
+                {storeFilter !== ALL_STORES || parentFilter != null || subcategoryFilter != null || dietFilter != null
                   ? 'Nothing matches that filter'
                   : 'Your feed is quiet'}
               </Text>
               <Text style={styles.emptyBody}>
-                {storeFilter !== ALL_STORES || categoryFilter !== ALL_CATEGORIES || dietFilter != null
-                  ? 'Try a different store, category, or diet, or clear the filters.'
+                {storeFilter !== ALL_STORES || parentFilter != null || subcategoryFilter != null || dietFilter != null
+                  ? 'Try a different store, category, or tag, or clear the filters.'
                   : 'Follow some friends or rank a few favorites — new posts will appear here.'}
               </Text>
             </View>
           )
         }
       />
+      <PostNoteEditorModal
+        visible={captionTarget != null}
+        productName={captionTarget ? wantToTryCaptionProductLabel(captionTarget) : undefined}
+        subtitle="Tell your followers why you want to try it — tag friends with @username."
+        saveLabel="Save & post"
+        saving={captionSaving}
+        onClose={handleCancelWantCaption}
+        onSave={(note) => void handleConfirmWantCaption(note)}
+      />
+      {likersModal}
     </SafeAreaView>
   );
 }
@@ -398,8 +566,8 @@ const styles = StyleSheet.create({
     backgroundColor: BaggedColors.content,
   },
   listContent: {
-    paddingHorizontal: BaggedLayout.screenPadding,
-    paddingTop: 6,
+    paddingHorizontal: 14,
+    paddingTop: 4,
     paddingBottom: 32 + BaggedLayout.rateFabListInset,
     flexGrow: 1,
   },

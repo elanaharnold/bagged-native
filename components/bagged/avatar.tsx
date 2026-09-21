@@ -6,9 +6,10 @@ type AvatarProps = {
   char: string;
   color?: string | null;
   size?: number;
+  borderColor?: string;
 };
 
-export function Avatar({ char, color, size = 36 }: AvatarProps) {
+export function Avatar({ char, color, size = 36, borderColor = BaggedColors.dark }: AvatarProps) {
   return (
     <View
       style={[
@@ -18,6 +19,7 @@ export function Avatar({ char, color, size = 36 }: AvatarProps) {
           height: size,
           borderRadius: size / 2,
           backgroundColor: color || BaggedColors.accent,
+          borderColor,
         },
       ]}>
       <Text
@@ -39,10 +41,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: BaggedColors.dark,
   },
   label: {
-    color: '#FFFFFF',
+    color: BaggedColors.green,
     fontWeight: '400',
   },
 });

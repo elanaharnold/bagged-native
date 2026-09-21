@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
@@ -9,6 +9,7 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+      <StatusBar barStyle="light-content" />
       <View style={styles.center}>
         <Text style={styles.wordmark} accessibilityRole="header">
           bagged
@@ -39,7 +40,7 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: BaggedColors.bg,
+    backgroundColor: BaggedColors.accent,
     paddingHorizontal: 28,
   },
   center: {
@@ -50,7 +51,7 @@ const styles = StyleSheet.create({
   wordmark: {
     fontFamily: BaggedFonts.display,
     fontSize: 56,
-    color: BaggedColors.onBg,
+    color: BaggedColors.cream,
     letterSpacing: -1.5,
     textTransform: 'lowercase',
     textAlign: 'center',
@@ -70,7 +71,7 @@ const styles = StyleSheet.create({
   createAccount: {
     fontFamily: BaggedFonts.display,
     fontSize: 22,
-    color: BaggedColors.onBg,
+    color: BaggedColors.cream,
     letterSpacing: -0.3,
     textAlign: 'center',
     textTransform: 'uppercase',
@@ -78,7 +79,7 @@ const styles = StyleSheet.create({
   logIn: {
     fontFamily: BaggedFonts.display,
     fontSize: 30,
-    color: BaggedColors.onBg,
+    color: BaggedColors.cream,
     letterSpacing: -0.5,
     textAlign: 'center',
     textTransform: 'uppercase',

@@ -4,7 +4,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -12,10 +11,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
 import { PrimaryButton } from '@/components/bagged/primary-button';
 import { TextField } from '@/components/bagged/text-field';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
 import { useAuth } from '@/providers/auth-provider';
+import { logEvent } from '@/lib/log-event';
 import { supabase } from '@/lib/supabase';
 
 const USERNAME_ALLOWED_RE = /[^a-z0-9_.]/g;
@@ -68,6 +69,7 @@ export default function SignUpScreen() {
         return;
       }
       await signUp({ email, password, username: u });
+      logEvent('signup_completed', { method: 'email' });
       // Auth state listener flips to a session and the (auth) layout redirects.
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not create your account.';
@@ -85,9 +87,9 @@ export default function SignUpScreen() {
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <StatusBar barStyle="light-content" />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.flex}>
-        <ScrollView
+        <KeyboardFormScroll
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled">
           <View style={styles.headerRow}>
@@ -175,7 +177,7 @@ export default function SignUpScreen() {
               </Text>
             </Pressable>
           </View>
-        </ScrollView>
+        </KeyboardFormScroll>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -214,7 +216,7 @@ const styles = StyleSheet.create({
   backText: {
     fontFamily: BaggedFonts.body,
     fontSize: 18,
-    color: '#FFFFFF',
+    color: BaggedColors.green,
     marginTop: -2,
   },
   hero: {
@@ -223,7 +225,7 @@ const styles = StyleSheet.create({
   heading: {
     fontFamily: BaggedFonts.display,
     fontSize: 36,
-    color: '#FFFFFF',
+    color: BaggedColors.green,
     letterSpacing: -0.6,
     marginBottom: 10,
   },
@@ -249,7 +251,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.55)',
   },
   swapPromptEmphasis: {
-    color: '#FFFFFF',
+    color: BaggedColors.green,
     fontWeight: '700',
   },
 });
