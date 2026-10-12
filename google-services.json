@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "598153430014",
+    "project_id": "bagged-8335e",
+    "storage_bucket": "bagged-8335e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:598153430014:android:14b9bbca07945ef18976af",
+        "android_client_info": {
+          "package_name": "com.elanah.baggednative"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCS4THzIxaMcXqqFZcWkfsFOSVOBdZtFl4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
