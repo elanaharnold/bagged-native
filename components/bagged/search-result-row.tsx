@@ -9,20 +9,28 @@ type SearchResultRowProps = {
   row: SearchProductRow;
   onPress: (row: SearchProductRow) => void;
   alreadyRanked?: boolean;
+  /** Still tappable when already ranked (e.g. opening the product page instead of ranking). */
+  pressableWhenRanked?: boolean;
 };
 
-export function SearchResultRow({ row, onPress, alreadyRanked = false }: SearchResultRowProps) {
+export function SearchResultRow({
+  row,
+  onPress,
+  alreadyRanked = false,
+  pressableWhenRanked = false,
+}: SearchResultRowProps) {
   const brand = searchRowBrand(row);
+  const blocked = alreadyRanked && !pressableWhenRanked;
   return (
     <Pressable
       onPress={() => {
-        if (alreadyRanked) return;
+        if (blocked) return;
         onPress(row);
       }}
       style={({ pressed }) => [
         styles.row,
-        alreadyRanked && styles.rowAlreadyRanked,
-        pressed && !alreadyRanked && styles.pressed,
+        blocked && styles.rowAlreadyRanked,
+        pressed && !blocked && styles.pressed,
       ]}>
       <View style={styles.thumb}>
         <Text style={styles.thumbText}>

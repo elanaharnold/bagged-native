@@ -1684,6 +1684,7 @@ export default function RateScreen() {
                   : 'Find a product to rate'
             }
             onScan={() => router.replace('/scan')}
+            rankedRowsOpenProduct={isBrowseEntry && entryIntent == null}
             onPick={pickFromSearch}
             onManualEntry={openManualEntry}
             isAlreadyRanked={(row) =>
@@ -2072,6 +2073,7 @@ function SearchStep({
   onPick,
   onManualEntry,
   isAlreadyRanked,
+  rankedRowsOpenProduct = false,
 }: {
   query: string;
   setQuery: (v: string) => void;
@@ -2082,6 +2084,8 @@ function SearchStep({
   onPick: (row: SearchProductRow) => void | Promise<void>;
   onManualEntry: () => void;
   isAlreadyRanked?: (row: SearchProductRow) => boolean;
+  /** Browsing from the + button: ranked items still open their product page. */
+  rankedRowsOpenProduct?: boolean;
 }) {
   const q = query.trim();
   const showManual = q.length >= 2 && !loading;
@@ -2136,6 +2140,7 @@ function SearchStep({
             row={item}
             onPress={onPick}
             alreadyRanked={isAlreadyRanked?.(item) ?? false}
+            pressableWhenRanked={rankedRowsOpenProduct}
           />
         )}
         keyboardShouldPersistTaps="handled"

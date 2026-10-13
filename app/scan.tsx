@@ -58,6 +58,19 @@ type Phase =
   | { name: 'not_found'; scan: ScannedBarcode }
   | { name: 'error'; scan: ScannedBarcode; message: string };
 
+/** True when the scanned product and the user's ranked post share the same product key. */
+function sameProductKey(row: SearchProductRow, post: RankedPostRow): boolean {
+  const scannedKey = (
+    String(row.descriptionKey ?? '').trim() ||
+    productDescriptionKey(row.description, searchRowBrand(row))
+  ).toLowerCase();
+  const rankedKey = (
+    String(post.description_key ?? '').trim() ||
+    productDescriptionKey(post.item, post.product_brand)
+  ).toLowerCase();
+  return Boolean(scannedKey) && scannedKey === rankedKey;
+}
+
 export default function ScanScreen() {
   const router = useRouter();
   const { userId } = useAuth();
@@ -122,6 +135,12 @@ export default function ScanScreen() {
       // under a slightly different name (search results and barcode databases word things differently).
       const existing = userId ? await findSimilarRankedPost(userId, result.row) : null;
       if (!mountedRef.current) return;
+      if (existing && sameProductKey(result.row, existing)) {
+        // Exactly the product they ranked: no need to ask, its page shows their score.
+        logEvent('scan_already_ranked_exact', { source: result.source });
+        openScannedProduct({ scan, source: result.source, row: result.row, needsLink });
+        return;
+      }
       if (existing) {
         logEvent('scan_already_ranked_prompt', { source: result.source });
         setPhase({
