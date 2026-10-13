@@ -1997,8 +1997,9 @@ function RadarConfirmStep({
   onSubmit: () => void;
 }) {
   const tjOnly = isLegitimateTraderJoesBrand(selected.brand, { assumePlaceholder: false });
+  const scrollRef = useRef<ScrollView>(null);
   return (
-    <KeyboardFormScroll contentContainerStyle={styles.stepContent}>
+    <KeyboardFormScroll ref={scrollRef} contentContainerStyle={styles.stepContent}>
       <ProductSummary selected={selected} />
       <Text style={styles.stepHeading}>Where would you get it?</Text>
       <Text style={styles.stepHint}>Optional — skip if you&apos;re not sure yet.</Text>
@@ -2010,6 +2011,7 @@ function RadarConfirmStep({
         onToggleStore={onToggleStore}
         tjOnly={tjOnly}
         chipStyles={styles}
+        scrollRef={scrollRef}
       />
       <Text style={[styles.stepHeading, { marginTop: 24 }]}>What type of product is this?</Text>
       <SubcategoryPickerGrid
@@ -2263,6 +2265,7 @@ function ManualEntryStep({
         onToggleStore={onToggleStore}
         tjOnly={tjOnly}
         chipStyles={styles}
+        scrollRef={scrollRef}
       />
 
       <Text style={[styles.fieldLabel, { marginTop: 20 }]}>Product type *</Text>

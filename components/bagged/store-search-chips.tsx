@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
+  Keyboard,
   Pressable,
+  type ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -47,6 +49,7 @@ export function StoreSearchChips({
   onToggleStore,
   tjOnly = false,
   chipStyles,
+  scrollRef,
 }: {
   selectedStores: string[];
   onToggleStore: (store: string) => void;
@@ -54,14 +57,59 @@ export function StoreSearchChips({
   tjOnly?: boolean;
   /** The parent screen's chip styles, so the buttons look the same as before. */
   chipStyles: StoreChipStyles;
+  /**
+   * The screen's ScrollView. When the search box is focused it scrolls to the top of the
+   * screen so the matching stores sit between it and the keyboard instead of behind it.
+   */
+  scrollRef?: RefObject<ScrollView | null>;
 }) {
   const [query, setQuery] = useState('');
+  const [focused, setFocused] = useState(false);
   const searching = query.trim().length > 0;
   const visible = useMemo(() => storesMatchingQuery(query), [query]);
 
+  const rowRef = useRef<View>(null);
+  /** Height of the full button list, so the section doesn't collapse while searching. */
+  const [fullListHeight, setFullListHeight] = useState(0);
+  const pendingKeyboardSub = useRef<{ remove: () => void } | null>(null);
+
+  useEffect(() => () => pendingKeyboardSub.current?.remove(), []);
+
+  const scrollSearchToTop = useCallback(() => {
+    const scroll = scrollRef?.current;
+    const row = rowRef.current;
+    if (!scroll || !row) return;
+    // Measure against the scroll content (not the visible frame) to get an absolute offset.
+    // getInnerViewRef exists at runtime but is missing from React Native's type definitions.
+    const withInnerRef = scroll as unknown as { getInnerViewRef?: () => unknown };
+    const inner = withInnerRef.getInnerViewRef?.() ?? scroll.getInnerViewNode();
+    if (!inner) return;
+    row.measureLayout(
+      inner as View,
+      (_x, y) => scroll.scrollTo({ y: Math.max(0, y - 12), animated: true }),
+      () => {}
+    );
+  }, [scrollRef]);
+
+  const handleFocus = useCallback(() => {
+    setFocused(true);
+    if (!scrollRef) return;
+    pendingKeyboardSub.current?.remove();
+    if (Keyboard.isVisible()) {
+      setTimeout(scrollSearchToTop, 50);
+      return;
+    }
+    // Wait for the keyboard so our scroll lands after the system's own focus scroll.
+    pendingKeyboardSub.current = Keyboard.addListener('keyboardDidShow', () => {
+      pendingKeyboardSub.current?.remove();
+      pendingKeyboardSub.current = null;
+      scrollSearchToTop();
+    });
+  }, [scrollRef, scrollSearchToTop]);
+
   return (
     <View>
-      <View style={styles.searchRow}>
+      <View ref={rowRef} style={styles.searchRow}>
         <Ionicons name="search" size={16} color={BaggedColors.onBgMuted} />
         <TextInput
           value={query}
@@ -73,6 +121,8 @@ export function StoreSearchChips({
           returnKeyType="done"
           style={styles.input}
           accessibilityLabel="Search stores"
+          onFocus={handleFocus}
+          onBlur={() => setFocused(false)}
         />
         {searching ? (
           <Pressable
@@ -84,33 +134,41 @@ export function StoreSearchChips({
           </Pressable>
         ) : null}
       </View>
-      {visible.length === 0 ? (
-        <Text style={styles.empty}>No stores match &quot;{query.trim()}&quot;</Text>
-      ) : (
-        <View style={chipStyles.chipGrid}>
-          {visible.map((s) => {
-            const active = selectedStores.includes(s);
-            const disabled = tjOnly && s !== TRADER_JOES_STORE;
-            return (
-              <Pressable
-                key={s}
-                onPress={() => {
-                  onToggleStore(s);
-                  // Picked from a search: show the full list again with the new pick highlighted.
-                  if (searching) setQuery('');
-                }}
-                disabled={disabled}
-                style={[
-                  chipStyles.chip,
-                  active && chipStyles.chipActive,
-                  disabled && chipStyles.chipDisabled,
-                ]}>
-                <Text style={[chipStyles.chipText, active && chipStyles.chipTextActive]}>{s}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      )}
+      <View
+        // Hold the full list's height while searching so the page doesn't shrink under the
+        // keyboard and drag the results out of view.
+        style={focused || searching ? { minHeight: fullListHeight } : undefined}
+        onLayout={(e) => {
+          if (!searching) setFullListHeight(e.nativeEvent.layout.height);
+        }}>
+        {visible.length === 0 ? (
+          <Text style={styles.empty}>No stores match &quot;{query.trim()}&quot;</Text>
+        ) : (
+          <View style={chipStyles.chipGrid}>
+            {visible.map((s) => {
+              const active = selectedStores.includes(s);
+              const disabled = tjOnly && s !== TRADER_JOES_STORE;
+              return (
+                <Pressable
+                  key={s}
+                  onPress={() => {
+                    onToggleStore(s);
+                    // Picked from a search: show the full list again with the new pick highlighted.
+                    if (searching) setQuery('');
+                  }}
+                  disabled={disabled}
+                  style={[
+                    chipStyles.chip,
+                    active && chipStyles.chipActive,
+                    disabled && chipStyles.chipDisabled,
+                  ]}>
+                  <Text style={[chipStyles.chipText, active && chipStyles.chipTextActive]}>{s}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
+      </View>
     </View>
   );
 }

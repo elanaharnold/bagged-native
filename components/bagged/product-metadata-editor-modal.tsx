@@ -220,6 +220,7 @@ export function ProductMetadataEditorModal({
                   onToggleStore={toggleStore}
                   tjOnly={tjOnly}
                   chipStyles={styles}
+                  scrollRef={scrollRef}
                 />
               </>
             ) : mode === 'diet' ? (

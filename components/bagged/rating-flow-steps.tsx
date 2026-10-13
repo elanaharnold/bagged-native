@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AutoFitText } from '@/components/bagged/auto-fit-text';
 import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
@@ -245,8 +245,9 @@ export function VibeStep({
   continueLabel?: string;
 }) {
   const tjOnly = isLegitimateTraderJoesBrand(selected.brand, { assumePlaceholder: false });
+  const scrollRef = useRef<ScrollView>(null);
   return (
-    <KeyboardFormScroll contentContainerStyle={styles.stepContent}>
+    <KeyboardFormScroll ref={scrollRef} contentContainerStyle={styles.stepContent}>
       <ProductSummary selected={selected} subtitle={subcategoryLabel ?? category ?? undefined} />
       <Text style={styles.stepHeading}>How was it?</Text>
       <View style={styles.vibeColumn}>
@@ -281,6 +282,7 @@ export function VibeStep({
             onToggleStore={onToggleStore}
             tjOnly={tjOnly}
             chipStyles={{ ...styles, chipGrid: [styles.chipGrid, { marginTop: 0 }] }}
+            scrollRef={scrollRef}
           />
         </>
       ) : null}
