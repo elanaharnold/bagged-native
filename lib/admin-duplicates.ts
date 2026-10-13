@@ -29,7 +29,11 @@ export type DuplicateCandidate = {
   reported: boolean;
   report_barcode: string | null;
   scanned_key: string | null;
-  sim: number;
+  /** How many more words one name has than the other (0 = same words, different order or wording). */
+  extras: number;
+  /** Which name has the extra words. */
+  extra_side: DuplicateSide | null;
+  extra_words: string[];
   /** Users who ranked both versions (merging would give them two posts of one product). */
   conflict_users: number;
 };
@@ -38,6 +42,20 @@ export async function fetchDuplicateCandidates(): Promise<DuplicateCandidate[]> 
   const { data, error } = await supabase.rpc('admin_duplicate_candidates');
   if (error) throw error;
   return Array.isArray(data) ? (data as DuplicateCandidate[]) : [];
+}
+
+/** Supabase errors are plain objects, not Error instances, so read the message off either. */
+export function errorText(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err) {
+    const m = String((err as { message?: unknown }).message ?? '').trim();
+    if (m) return m;
+  }
+  return 'Could not load duplicates.';
+}
+
+/** Both names have ratings, so merging them combines two community averages into one. */
+export function isBothRated(c: DuplicateCandidate): boolean {
+  return c.raters_a > 0 && c.raters_b > 0;
 }
 
 /** Which name to keep by default: the scanner's name, then the barcode-linked one, then the busier one. */
@@ -102,5 +120,46 @@ export async function dismissDuplicate(c: DuplicateCandidate): Promise<boolean> 
     p_key_a: c.key_a,
     p_key_b: c.key_b,
   });
+  return !error;
+}
+
+/**
+ * Admin-only review of "suggest an edit" reports from `lib/data.ts`'s
+ * `submitProductEditSuggestion`. RLS restricts reads/updates on
+ * `product_edit_suggestions` to the admin email, same as `curated_products`.
+ */
+
+export type ProductEditSuggestion = {
+  id: string;
+  reporter_id: string;
+  description_key: string;
+  item: string;
+  brand: string | null;
+  barcode: string | null;
+  suggestion_type: 'name' | 'brand' | 'nutrition' | 'category_store' | 'other';
+  suggested_value: string;
+  note: string | null;
+  status: 'pending' | 'applied' | 'dismissed';
+  created_at: string;
+};
+
+export async function fetchProductEditSuggestions(): Promise<ProductEditSuggestion[]> {
+  const { data, error } = await supabase
+    .from('product_edit_suggestions')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return Array.isArray(data) ? (data as ProductEditSuggestion[]) : [];
+}
+
+export async function resolveProductEditSuggestion(
+  id: string,
+  status: 'applied' | 'dismissed'
+): Promise<boolean> {
+  const { error } = await supabase
+    .from('product_edit_suggestions')
+    .update({ status, resolved_at: new Date().toISOString() })
+    .eq('id', id);
   return !error;
 }

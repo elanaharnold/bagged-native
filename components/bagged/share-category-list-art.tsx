@@ -1,6 +1,5 @@
-import { Image } from 'expo-image';
-import { forwardRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { forwardRef, useEffect } from 'react';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import ViewShot from 'react-native-view-shot';
 
 import { Avatar } from '@/components/bagged/avatar';
@@ -20,10 +19,12 @@ const CARD_PADDING = 20;
 
 type ShareCategoryListArtProps = {
   data: CategoryListShareableData;
+  /** Called once the logo has rendered, so capture never snaps a blank corner. */
+  onLogoReady?: () => void;
 };
 
 export const ShareCategoryListArt = forwardRef<ViewShot, ShareCategoryListArtProps>(
-  function ShareCategoryListArt({ data }, ref) {
+  function ShareCategoryListArt({ data, onLogoReady }, ref) {
     const avatarChar =
       data.avatarChar?.trim() || (data.username || '?').charAt(0).toUpperCase();
     const displayName = data.displayName?.trim() || data.username || 'You';
@@ -53,7 +54,14 @@ export const ShareCategoryListArt = forwardRef<ViewShot, ShareCategoryListArtPro
                   </Text>
                 </View>
               </View>
-              <Image source={SHAREABLE_LOGO} style={styles.headerLogo} contentFit="contain" />
+              <Image
+                source={SHAREABLE_LOGO}
+                style={styles.headerLogo}
+                resizeMode="contain"
+                fadeDuration={0}
+                onLoad={onLogoReady}
+                onError={onLogoReady}
+              />
             </View>
 
             <Text style={styles.categoryTitle} allowFontScaling={false}>

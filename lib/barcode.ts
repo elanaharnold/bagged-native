@@ -1,5 +1,6 @@
 import {
   curatedRowToSearchProductRow,
+  FATSECRET_FOOD_API_URL,
   getUserRankings,
   isRadarOnlyDbRow,
   productDescriptionKey,
@@ -100,7 +101,21 @@ function cleanText(value: unknown): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-async function lookupCuratedByBarcode(candidates: string[]): Promise<SearchProductRow | null> {
+/** A resolved product identity, plus where (if anywhere) to write back enriched nutrition. */
+type IdentifiedRow = { row: SearchProductRow; anchor: CatalogAnchor | null };
+type CatalogAnchor = { id: string; nutritionCheckedAt: string | null };
+
+function anchorFromCuratedRow(
+  raw: (Record<string, unknown> & { id?: unknown; nutrition_checked_at?: unknown }) | undefined
+): CatalogAnchor | null {
+  if (!raw?.id) return null;
+  return {
+    id: String(raw.id),
+    nutritionCheckedAt: typeof raw.nutrition_checked_at === 'string' ? raw.nutrition_checked_at : null,
+  };
+}
+
+async function lookupCuratedByBarcode(candidates: string[]): Promise<IdentifiedRow | null> {
   const list = candidates.join(',');
   const { data, error } = await supabase
     .from('curated_products')
@@ -108,11 +123,33 @@ async function lookupCuratedByBarcode(candidates: string[]): Promise<SearchProdu
     .or(`barcode.in.(${list}),upc.in.(${list})`)
     .limit(1);
   if (error) throw error;
-  const row = data?.[0];
-  return row ? curatedRowToSearchProductRow(row as Record<string, unknown>) : null;
+  const raw = data?.[0] as Record<string, unknown> | undefined;
+  if (!raw) return null;
+  return { row: curatedRowToSearchProductRow(raw), anchor: anchorFromCuratedRow(raw) };
 }
 
-async function lookupCommunityBarcode(candidates: string[]): Promise<SearchProductRow | null> {
+/**
+ * A description_key can go stale the moment an admin renames a product (see
+ * setProductMetadataGlobally / merge_product_identity_alias): the catalog row moves to a new
+ * key, but anything that still points at the old one (like a barcode linked before the
+ * rename) isn't updated in place. This follows that one redirect, same as the rest of the
+ * app already does via resolveProductDescriptionKey's server-side counterpart.
+ */
+async function resolveCanonicalDescriptionKey(key: string): Promise<string> {
+  try {
+    // product_identity_aliases has no direct-read policy for clients (by design), so this
+    // goes through a narrow RPC that only ever returns a redirect target, nothing else.
+    const { data, error } = await supabase.rpc('resolve_product_identity_alias', { p_key: key });
+    if (error) throw error;
+    const canonical = cleanText(data);
+    return canonical || key;
+  } catch (err) {
+    if (__DEV__) console.warn('resolveCanonicalDescriptionKey:', err);
+    return key;
+  }
+}
+
+async function lookupCommunityBarcode(candidates: string[]): Promise<IdentifiedRow | null> {
   const { data, error } = await supabase
     .from('product_barcodes')
     .select('description_key, item, brand')
@@ -127,7 +164,10 @@ async function lookupCommunityBarcode(candidates: string[]): Promise<SearchProdu
     if (prev) prev.count += 1;
     else tally.set(r.description_key, { count: 1, item: r.item, brand: r.brand ?? '' });
   }
-  const [descriptionKey, best] = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)[0];
+  const [linkedKey, best] = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)[0];
+  // The barcode link was made before any rename; follow it to the current name so a scan
+  // never regresses to a stale, pre-rename identity.
+  const descriptionKey = await resolveCanonicalDescriptionKey(linkedKey);
 
   const { data: curated, error: curatedErr } = await supabase
     .from('curated_products')
@@ -135,14 +175,21 @@ async function lookupCommunityBarcode(candidates: string[]): Promise<SearchProdu
     .eq('description_key', descriptionKey)
     .limit(1);
   if (curatedErr) throw curatedErr;
-  if (curated?.[0]) return curatedRowToSearchProductRow(curated[0] as Record<string, unknown>);
+  const raw = curated?.[0] as Record<string, unknown> | undefined;
+  if (raw) return { row: curatedRowToSearchProductRow(raw), anchor: anchorFromCuratedRow(raw) };
 
+  // Barcode is linked to a name (often a search pick that was never its own catalog row,
+  // e.g. a FatSecret-only result) but there's no catalog row to enrich or cache against yet.
+  // Enrichment below still runs for this one scan, just without persistence.
   return {
-    description: best.item,
-    descriptionKey,
-    brandName: best.brand,
-    brandOwner: best.brand,
-    foodCategory: '',
+    row: {
+      description: best.item,
+      descriptionKey,
+      brandName: best.brand,
+      brandOwner: best.brand,
+      foodCategory: '',
+    },
+    anchor: null,
   };
 }
 
@@ -154,13 +201,67 @@ function pickBrand(brands: string, name: string): string {
   return list.find((b) => lowerName.includes(b.toLowerCase())) ?? list[0];
 }
 
-/** Open Food Facts (ODbL). Returns null when the product is unknown; throws on network errors. */
-async function lookupOpenFoodFacts(gtin: string): Promise<SearchProductRow | null> {
+function offNum(value: unknown): number | null {
+  const n = typeof value === 'string' ? Number(value) : value;
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Open Food Facts ties nutrition to the exact scanned barcode (not a fuzzy name match),
+ * so it's safe to auto-fill from — unlike the FatSecret name-search case. Prefers the
+ * per-serving numbers OFF has already computed; falls back to per-100g, clearly labeled,
+ * when a product has no serving size on file.
+ */
+function macrosFromOpenFoodFacts(product: {
+  serving_size?: string;
+  nutriments?: Record<string, unknown>;
+}): {
+  cal: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+  servingLabel: string | null;
+} {
+  const n = product.nutriments ?? {};
+  const perServing = {
+    cal: offNum(n['energy-kcal_serving']),
+    protein: offNum(n['proteins_serving']),
+    carbs: offNum(n['carbohydrates_serving']),
+    fat: offNum(n['fat_serving']),
+  };
+  if (perServing.cal != null || perServing.protein != null || perServing.carbs != null || perServing.fat != null) {
+    return { ...perServing, servingLabel: cleanText(product.serving_size) || null };
+  }
+  const per100 = {
+    cal: offNum(n['energy-kcal_100g']),
+    protein: offNum(n['proteins_100g']),
+    carbs: offNum(n['carbohydrates_100g']),
+    fat: offNum(n['fat_100g']),
+  };
+  if (per100.cal != null || per100.protein != null || per100.carbs != null || per100.fat != null) {
+    return { ...per100, servingLabel: 'per 100 g' };
+  }
+  return { cal: null, protein: null, carbs: null, fat: null, servingLabel: null };
+}
+
+/** A barcode-matched product's identity and nutrition, from any exact-barcode source. */
+type BarcodeMatchedProduct = {
+  name: string;
+  brand: string;
+  cal: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+  servingLabel: string | null;
+};
+
+/** Open Food Facts (ODbL), raw. Returns null when the barcode is unknown; throws on network errors. */
+async function fetchOpenFoodFactsProduct(gtin: string): Promise<BarcodeMatchedProduct | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OFF_TIMEOUT_MS);
   try {
     const res = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${gtin}.json?fields=product_name,product_name_en,brands`,
+      `https://world.openfoodfacts.org/api/v2/product/${gtin}.json?fields=product_name,product_name_en,brands,serving_size,nutriments`,
       {
         headers: { 'User-Agent': OFF_USER_AGENT, Accept: 'application/json' },
         signal: controller.signal,
@@ -170,39 +271,245 @@ async function lookupOpenFoodFacts(gtin: string): Promise<SearchProductRow | nul
     if (!res.ok) throw new Error(`Open Food Facts returned ${res.status}`);
     const json = (await res.json()) as {
       status?: number;
-      product?: { product_name?: string; product_name_en?: string; brands?: string };
+      product?: {
+        product_name?: string;
+        product_name_en?: string;
+        brands?: string;
+        serving_size?: string;
+        nutriments?: Record<string, unknown>;
+      };
     };
     if (json.status !== 1 || !json.product) return null;
     const name = cleanText(json.product.product_name_en) || cleanText(json.product.product_name);
     if (!name) return null;
     const brand = pickBrand(String(json.product.brands ?? ''), name);
-    return {
-      description: name,
-      descriptionKey: productDescriptionKey(name, brand),
-      brandName: brand,
-      brandOwner: brand,
-      foodCategory: '',
-    };
+    const macros = macrosFromOpenFoodFacts(json.product);
+    return { name, brand, ...macros };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Catalog first, then community-linked barcodes, then Open Food Facts. */
+/** Open Food Facts, as a search row for the "no catalog/community identity at all" path. */
+async function lookupOpenFoodFacts(gtin: string): Promise<SearchProductRow | null> {
+  const off = await fetchOpenFoodFactsProduct(gtin);
+  if (!off) return null;
+  return {
+    description: off.name,
+    descriptionKey: productDescriptionKey(off.name, off.brand),
+    brandName: off.brand,
+    brandOwner: off.brand,
+    foodCategory: '',
+    cal: off.cal,
+    protein: off.protein,
+    carbs: off.carbs,
+    fat: off.fat,
+    servingLabel: off.servingLabel,
+  };
+}
+
+const FATSECRET_BARCODE_TIMEOUT_MS = 8000;
+
+/**
+ * FatSecret's own barcode index (`food.find_id_for_barcode` -> `food.get`, via the Vercel
+ * proxy), matched by the exact scanned GTIN, not a name guess. Often has grocery/private-label
+ * nutrition Open Food Facts is missing, but its barcode coverage is its own separate,
+ * sometimes-sparser index from its name-search database. Best-effort: never throws.
+ */
+async function lookupFatSecretByBarcode(gtin: string): Promise<BarcodeMatchedProduct | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FATSECRET_BARCODE_TIMEOUT_MS);
+  try {
+    const res = await fetch(FATSECRET_FOOD_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ barcode: gtin }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const payload = (await res.json().catch(() => null)) as {
+      matched?: boolean;
+      macros?: {
+        cal?: number | string | null;
+        protein?: number | string | null;
+        carbs?: number | string | null;
+        fat?: number | string | null;
+        servingLabel?: string | null;
+      } | null;
+      foodName?: string;
+      brandName?: string;
+    } | null;
+    if (!payload?.matched || !payload.macros) return null;
+    const name = cleanText(payload.foodName);
+    if (!name) return null;
+    const m = payload.macros;
+    const cal = offNum(m.cal);
+    const protein = offNum(m.protein);
+    const carbs = offNum(m.carbs);
+    const fat = offNum(m.fat);
+    if (cal == null && protein == null && carbs == null && fat == null) return null;
+    return {
+      name,
+      brand: cleanText(payload.brandName),
+      cal,
+      protein,
+      carbs,
+      fat,
+      servingLabel: cleanText(m.servingLabel) || null,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function hasUsableMacros(row: { cal?: number | null; protein?: number | null; carbs?: number | null; fat?: number | null }): boolean {
+  return row.cal != null || row.protein != null || row.carbs != null || row.fat != null;
+}
+
+const NUTRITION_RECHECK_COOLDOWN_MS = 21 * 24 * 60 * 60 * 1000; // 3 weeks
+
+function shouldAttemptEnrichment(checkedAt: string | null): boolean {
+  if (!checkedAt) return true;
+  const last = new Date(checkedAt).getTime();
+  if (!Number.isFinite(last)) return true;
+  return Date.now() - last > NUTRITION_RECHECK_COOLDOWN_MS;
+}
+
+/**
+ * Persist an enrichment attempt against the catalog row it came from, so a repeatedly
+ * scanned item that has no nutrition anywhere doesn't retrigger OFF + FatSecret calls on
+ * every scan. RLS only allows this update while the row is still 'unverified', which is
+ * exactly the case this runs in; it never touches an admin-verified row.
+ */
+async function recordNutritionEnrichment(
+  curatedId: string,
+  enriched: BarcodeMatchedProduct | null,
+  source: 'off' | 'fatsecret' | null
+): Promise<void> {
+  try {
+    const patch: Record<string, unknown> = { nutrition_checked_at: new Date().toISOString() };
+    if (enriched) {
+      patch.cal = enriched.cal;
+      patch.protein = enriched.protein;
+      patch.carbs = enriched.carbs;
+      patch.fat = enriched.fat;
+      if (enriched.servingLabel) patch.serving_label = enriched.servingLabel;
+      patch.nutrition_source = source;
+    }
+    await supabase
+      .from('curated_products')
+      .update(patch)
+      .eq('id', curatedId)
+      .eq('nutrition_verification_state', 'unverified');
+  } catch (err) {
+    if (__DEV__) console.warn('recordNutritionEnrichment:', err);
+  }
+}
+
+/**
+ * A barcode already resolved to a known product (catalog or community-linked) but that
+ * product has no usable nutrition on file. Try Open Food Facts, then FatSecret, both
+ * matched by the exact scanned barcode; only accept a source whose returned name/brand is
+ * still recognizably the same product (guards against either barcode index occasionally
+ * mapping to the wrong item). Writes back to the catalog when there's a row to write to.
+ */
+async function withNutritionEnrichment(gtin: string, found: IdentifiedRow): Promise<SearchProductRow> {
+  const { row, anchor } = found;
+  if (hasUsableMacros(row)) return row;
+  if (anchor && !shouldAttemptEnrichment(anchor.nutritionCheckedAt)) return row;
+
+  const known = { item: row.description, brand: searchRowBrand(row), descriptionKey: row.descriptionKey };
+  let enriched: BarcodeMatchedProduct | null = null;
+  let source: 'off' | 'fatsecret' | null = null;
+
+  try {
+    const off = await fetchOpenFoodFactsProduct(gtin);
+    if (off && hasUsableMacros(off) && similarityToRankedPost(known, { item: off.name, brand: off.brand }) > 0) {
+      enriched = off;
+      source = 'off';
+    }
+  } catch (err) {
+    if (__DEV__) console.warn('barcode nutrition enrichment (OFF):', err);
+  }
+
+  if (!enriched) {
+    try {
+      const fs = await lookupFatSecretByBarcode(gtin);
+      if (fs && similarityToRankedPost(known, { item: fs.name, brand: fs.brand }) > 0) {
+        enriched = fs;
+        source = 'fatsecret';
+      }
+    } catch (err) {
+      if (__DEV__) console.warn('barcode nutrition enrichment (FatSecret):', err);
+    }
+  }
+
+  if (anchor) void recordNutritionEnrichment(anchor.id, enriched, source);
+  if (!enriched) return row;
+  return {
+    ...row,
+    cal: enriched.cal,
+    protein: enriched.protein,
+    carbs: enriched.carbs,
+    fat: enriched.fat,
+    servingLabel: enriched.servingLabel ?? row.servingLabel,
+  };
+}
+
+/**
+ * Open Food Facts already identified the product but had no macros for this barcode.
+ * There's no catalog row here to check against or cache to, so this is a one-off,
+ * in-memory-only attempt at FatSecret's barcode index.
+ */
+async function tryFatSecretBarcodeEnrichment(gtin: string, row: SearchProductRow): Promise<SearchProductRow | null> {
+  try {
+    const fs = await lookupFatSecretByBarcode(gtin);
+    if (!fs) return null;
+    const known = { item: row.description, brand: searchRowBrand(row), descriptionKey: row.descriptionKey };
+    if (similarityToRankedPost(known, { item: fs.name, brand: fs.brand }) <= 0) return null;
+    return {
+      ...row,
+      cal: fs.cal,
+      protein: fs.protein,
+      carbs: fs.carbs,
+      fat: fs.fat,
+      servingLabel: fs.servingLabel ?? row.servingLabel,
+    };
+  } catch (err) {
+    if (__DEV__) console.warn('barcode nutrition enrichment (FatSecret, OFF identity):', err);
+    return null;
+  }
+}
+
+/**
+ * Catalog first, then community-linked barcodes, then Open Food Facts — each keyed by the
+ * exact scanned barcode. A "match" here means the product's identity is known; if it has no
+ * usable nutrition yet, we try to fill it in (see withNutritionEnrichment /
+ * tryFatSecretBarcodeEnrichment) before returning, instead of showing an empty result when
+ * better data might be one more lookup away.
+ */
 export async function lookupBarcode(scan: ScannedBarcode): Promise<BarcodeLookupResult> {
   let hadError = false;
 
   try {
-    const row = await lookupCuratedByBarcode(scan.candidates);
-    if (row) return { kind: 'match', source: 'catalog', row };
+    const found = await lookupCuratedByBarcode(scan.candidates);
+    if (found) {
+      const row = await withNutritionEnrichment(scan.gtin, found);
+      return { kind: 'match', source: 'catalog', row };
+    }
   } catch (err) {
     hadError = true;
     if (__DEV__) console.warn('barcode catalog lookup:', err);
   }
 
   try {
-    const row = await lookupCommunityBarcode(scan.candidates);
-    if (row) return { kind: 'match', source: 'community', row };
+    const found = await lookupCommunityBarcode(scan.candidates);
+    if (found) {
+      const row = await withNutritionEnrichment(scan.gtin, found);
+      return { kind: 'match', source: 'community', row };
+    }
   } catch (err) {
     hadError = true;
     if (__DEV__) console.warn('barcode community lookup:', err);
@@ -210,7 +517,11 @@ export async function lookupBarcode(scan: ScannedBarcode): Promise<BarcodeLookup
 
   try {
     const row = await lookupOpenFoodFacts(scan.gtin);
-    if (row) return { kind: 'match', source: 'open_food_facts', row };
+    if (row) {
+      if (hasUsableMacros(row)) return { kind: 'match', source: 'open_food_facts', row };
+      const enriched = await tryFatSecretBarcodeEnrichment(scan.gtin, row);
+      return { kind: 'match', source: 'open_food_facts', row: enriched ?? row };
+    }
   } catch (err) {
     hadError = true;
     if (__DEV__) console.warn('barcode open food facts lookup:', err);

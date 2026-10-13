@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -32,17 +32,32 @@ type ShareCategoryListModalProps = {
 export function ShareCategoryListModal({ visible, data, onClose }: ShareCategoryListModalProps) {
   const captureRefView = useRef<ViewShot>(null);
   const [busy, setBusy] = useState<'save' | 'share' | null>(null);
+  const logoReadyRef = useRef(false);
+
+  useEffect(() => {
+    logoReadyRef.current = false;
+  }, [data]);
+
+  const waitForLogo = useCallback(async () => {
+    const deadline = Date.now() + 2000;
+    while (!logoReadyRef.current && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    // One extra frame so the decoded logo is painted before the snapshot.
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+  }, []);
 
   const capturePng = useCallback(async () => {
     if (!captureRefView.current) {
       throw new Error('Category list shareable is not ready yet.');
     }
+    await waitForLogo();
     return captureRef(captureRefView, {
       format: 'png',
       quality: 1,
       result: 'tmpfile',
     });
-  }, []);
+  }, [waitForLogo]);
 
   const handleSave = useCallback(async () => {
     if (!data || busy) return;
@@ -129,7 +144,13 @@ export function ShareCategoryListModal({ visible, data, onClose }: ShareCategory
           </View>
 
           <View style={styles.hiddenCapture} pointerEvents="none">
-            <ShareCategoryListArt ref={captureRefView} data={data} />
+            <ShareCategoryListArt
+              ref={captureRefView}
+              data={data}
+              onLogoReady={() => {
+                logoReadyRef.current = true;
+              }}
+            />
           </View>
 
           <View style={styles.actions}>

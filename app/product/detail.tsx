@@ -25,6 +25,7 @@ import {
   type ProductMetadataEditorMode,
 } from '@/components/bagged/product-metadata-editor-modal';
 import { PostNoteEditorModal } from '@/components/bagged/post-note-editor-modal';
+import { SuggestEditModal } from '@/components/bagged/suggest-edit-modal';
 import { PostPhotoStrip } from '@/components/bagged/post-photo-strip';
 import { RerankRequiredBanner } from '@/components/bagged/rerank-required-banner';
 import { WantToTryTag } from '@/components/bagged/want-to-try-tag';
@@ -51,6 +52,7 @@ import {
   rateMacroFormHasAny,
   resolveProductProfileMacros,
   setProductMetadataGlobally,
+  submitProductEditSuggestion,
   syncPostsSubcategoryFromCuratedCatalog,
   toggleLike,
   updatePostNote,
@@ -58,6 +60,7 @@ import {
   wantToTryStorePrimary,
   type FeedPostRow,
   type RateMacroFormState,
+  type ProductEditSuggestionType,
   type VerifiedCuratedNutrition,
   type WantToTryItem,
 } from '@/lib/data';
@@ -142,6 +145,8 @@ export default function ProductDetailScreen() {
   const [noteEditorOpen, setNoteEditorOpen] = useState(false);
   const [noteSaving, setNoteSaving] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [suggestEditOpen, setSuggestEditOpen] = useState(false);
+  const [suggestEditSaving, setSuggestEditSaving] = useState(false);
   const loadGenerationRef = useRef(0);
 
   const productWantIdentity = useMemo(
@@ -597,6 +602,37 @@ export default function ProductDetailScreen() {
     }
   };
 
+  const handleSubmitSuggestion = async (next: {
+    suggestionType: ProductEditSuggestionType;
+    suggestedValue: string;
+    note: string;
+  }) => {
+    if (!userId || !item || suggestEditSaving) return;
+    setSuggestEditSaving(true);
+    try {
+      const res = await submitProductEditSuggestion({
+        userId,
+        descriptionKey,
+        item,
+        brand: displayBrand,
+        suggestionType: next.suggestionType,
+        suggestedValue: next.suggestedValue,
+        note: next.note,
+      });
+      if (!res.ok) {
+        Alert.alert('Could not send', res.message);
+        return;
+      }
+      setSuggestEditOpen(false);
+      Alert.alert('Thanks!', "We'll take a look and update it if needed.");
+    } catch (err) {
+      console.warn('handleSubmitSuggestion:', err);
+      Alert.alert('Could not send', err instanceof Error ? err.message : 'Try again in a moment.');
+    } finally {
+      setSuggestEditSaving(false);
+    }
+  };
+
   const myPhotoCount = myPhotoSlot
     ? normalizePhotoUrls(myPhotoSlot.photo_urls).length
     : 0;
@@ -884,6 +920,13 @@ export default function ProductDetailScreen() {
                   <Text style={styles.adminEditLinkText}>Edit name & brand</Text>
                 </Pressable>
               ) : null}
+              {!isAdmin && userId ? (
+                <Pressable
+                  onPress={() => setSuggestEditOpen(true)}
+                  style={({ pressed }) => [styles.adminEditLink, pressed && styles.pillPressed]}>
+                  <Text style={styles.adminEditLinkText}>Something wrong? Suggest an edit</Text>
+                </Pressable>
+              ) : null}
             </View>
           </View>
 
@@ -1146,6 +1189,17 @@ export default function ProductDetailScreen() {
           setMetadataEditorMode(null);
         }}
         onSave={saveProductMetadata}
+      />
+      <SuggestEditModal
+        visible={suggestEditOpen}
+        itemTitle={formatProductDisplayName(displayItem)}
+        brand={displayBrand}
+        saving={suggestEditSaving}
+        onClose={() => {
+          if (suggestEditSaving) return;
+          setSuggestEditOpen(false);
+        }}
+        onSubmit={handleSubmitSuggestion}
       />
       <PostNoteEditorModal
         visible={noteEditorOpen}

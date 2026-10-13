@@ -17,7 +17,10 @@
         "NSUserNotificationsUsageDescription": "Bagged sends notifications when someone likes or comments on your posts, replies to you, or follows you.",
         "NSPhotoLibraryAddUsageDescription": "Bagged saves score cards and review photos to your Photos so you can share them.",
         "NSPhotoLibraryUsageDescription": "Bagged uses your photo library to attach photos to your reviews and to save score cards to share on Instagram."
-      }
+      },
+      "associatedDomains": [
+        "applinks:bagged-app.com"
+      ]
     },
     "android": {
       "softwareKeyboardLayoutMode": "resize",
@@ -45,7 +48,24 @@
         "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_AUDIO"
       ],
-      "package": "com.elanah.baggednative"
+      "package": "com.elanah.baggednative",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "bagged-app.com",
+              "pathPrefix": "/p"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
       "output": "static",
@@ -94,6 +114,10 @@
             "backgroundColor": "#097D3C"
           }
         }
+      ],
+      [
+        "react-native-share",
+        {}
       ]
     ],
     "experiments": {

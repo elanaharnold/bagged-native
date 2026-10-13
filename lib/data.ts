@@ -3048,6 +3048,39 @@ export async function getUserRankings(userId: string): Promise<RankedPostRow[]> 
   return enrichPostsWithSharedCatalogMetadata(deduped);
 }
 
+/**
+ * Item + brand for a description_key, for resolving a shared /p/<key> deep link back to a
+ * real product page. Checks the catalog first, then falls back to any post using that key
+ * (covers a product that was ranked but never made it into curated_products).
+ */
+export async function fetchProductIdentityByKey(
+  descriptionKey: string
+): Promise<{ item: string; brand: string } | null> {
+  const key = String(descriptionKey ?? '').trim();
+  if (!key) return null;
+
+  const { data: curated, error: curatedErr } = await supabase
+    .from('curated_products')
+    .select('description, brand')
+    .eq('description_key', key)
+    .limit(1)
+    .maybeSingle();
+  if (curatedErr) console.warn('fetchProductIdentityByKey (curated):', curatedErr.message);
+  const curatedItem = String(curated?.description ?? '').trim();
+  if (curatedItem) return { item: curatedItem, brand: String(curated?.brand ?? '').trim() };
+
+  const { data: post, error: postErr } = await supabase
+    .from('posts')
+    .select('item, product_brand')
+    .eq('description_key', key)
+    .limit(1)
+    .maybeSingle();
+  if (postErr) console.warn('fetchProductIdentityByKey (posts):', postErr.message);
+  const postItem = String(post?.item ?? '').trim();
+  if (!postItem) return null;
+  return { item: postItem, brand: String(post?.product_brand ?? '').trim() };
+}
+
 /** Curated catalog subcategory for pre-selecting in the rate flow. */
 export async function fetchCuratedSubcategoryForProduct(
   descriptionKey: string,
@@ -4171,7 +4204,7 @@ export async function fetchFollowingForProfileUserId(userId: string): Promise<Co
 // ─── Search API (Vercel) ──────────────────────────────────────────────────────
 
 const SEARCH_API_URL = 'https://bagged.vercel.app/api/search';
-const FATSECRET_FOOD_API_URL = 'https://bagged.vercel.app/api/fatsecret-food';
+export const FATSECRET_FOOD_API_URL = 'https://bagged.vercel.app/api/fatsecret-food';
 
 const EMPTY_RATE_MACRO_FORM: RateMacroFormState = {
   cal: '',
@@ -6539,6 +6572,50 @@ export async function setProductMetadataGlobally(
   pokeFeedRefresh();
 
   return { ok: true, updatedPostCount };
+}
+
+export type ProductEditSuggestionType = 'name' | 'brand' | 'nutrition' | 'category_store' | 'other';
+
+export const PRODUCT_EDIT_SUGGESTION_LABELS: Record<ProductEditSuggestionType, string> = {
+  name: 'Name / flavor',
+  brand: 'Brand',
+  nutrition: 'Nutrition facts',
+  category_store: 'Category / store',
+  other: 'Something else',
+};
+
+/**
+ * Any signed-in user can flag that something on a product looks wrong and suggest a fix.
+ * Goes straight into `product_edit_suggestions` for the admin to review (see
+ * `lib/admin-duplicates.ts`); it never changes the catalog on its own.
+ */
+export async function submitProductEditSuggestion(args: {
+  userId: string;
+  descriptionKey: string;
+  item: string;
+  brand?: string | null;
+  barcode?: string | null;
+  suggestionType: ProductEditSuggestionType;
+  suggestedValue: string;
+  note?: string;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const suggestedValue = args.suggestedValue.trim();
+  if (!suggestedValue) return { ok: false, message: 'Let us know what it should be.' };
+  const { error } = await supabase.from('product_edit_suggestions').insert({
+    reporter_id: args.userId,
+    description_key: args.descriptionKey,
+    item: args.item,
+    brand: args.brand?.trim() || null,
+    barcode: args.barcode?.trim() || null,
+    suggestion_type: args.suggestionType,
+    suggested_value: suggestedValue,
+    note: args.note?.trim() || null,
+  });
+  if (error) {
+    console.warn('submitProductEditSuggestion:', error.message);
+    return { ok: false, message: 'Could not send that. Try again in a moment.' };
+  }
+  return { ok: true };
 }
 
 export type CuratedProductTags = {

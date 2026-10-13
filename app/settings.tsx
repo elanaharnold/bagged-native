@@ -25,7 +25,7 @@ import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
 import { TextField } from '@/components/bagged/text-field';
 import { AVATAR_COLORS } from '@/constants/avatar-colors';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
-import { fetchDuplicateCandidates } from '@/lib/admin-duplicates';
+import { fetchDuplicateCandidates, isBothRated } from '@/lib/admin-duplicates';
 import { requestAccountDeletionRpc, updatePassword } from '@/lib/auth';
 import {
   fetchProfileById,
@@ -44,7 +44,7 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { userId, signOut, username: authUsername } = useAuth();
   const isAdmin = isAdminUsername(authUsername);
-  const [duplicateCount, setDuplicateCount] = useState<number | null>(null);
+  const [duplicateCount, setDuplicateCount] = useState<{ both: number; total: number } | null>(null);
   const { showFeedDietBar, showMacroNutrition, setShowFeedDietBar, setShowMacroNutrition } =
     useDisplaySettings();
 
@@ -94,7 +94,12 @@ export default function SettingsScreen() {
       let cancelled = false;
       fetchDuplicateCandidates()
         .then((rows) => {
-          if (!cancelled) setDuplicateCount(rows.length);
+          if (!cancelled) {
+            setDuplicateCount({
+              both: rows.filter((r) => r.reported || isBothRated(r)).length,
+              total: rows.length,
+            });
+          }
         })
         .catch(() => {
           if (!cancelled) setDuplicateCount(null);
@@ -334,9 +339,9 @@ export default function SettingsScreen() {
                         <Text style={styles.cardSub}>
                           {duplicateCount == null
                             ? 'Review products that may be the same'
-                            : duplicateCount === 0
+                            : duplicateCount.total === 0
                               ? 'Nothing to review'
-                              : `${duplicateCount} to review`}
+                              : `${duplicateCount.both} rated on both names, ${duplicateCount.total} total`}
                         </Text>
                       </View>
                       <Ionicons name="chevron-forward" size={20} color={BaggedColors.muted} />
