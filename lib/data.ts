@@ -6273,6 +6273,8 @@ export type SetProductMetadataGloballyArgs = {
   /** When set, replaces nutrition on unverified catalog rows and all matching posts. */
   macros?: RateMacroFormState;
   /** Admin (@elanah): may edit title/brand on verified catalog rows. */
+  /** Admin nutrition edit: also overwrite staff-verified catalog macros (others can't). */
+  adminNutritionEdit?: boolean;
   adminEdit?: boolean;
 };
 
@@ -6353,7 +6355,7 @@ export async function setProductMetadataGlobally(
       const updatePayload: Record<string, unknown> = {
         ...catalogIdentityPayload,
       };
-      if (isVerified && macrosPayload !== undefined) {
+      if (isVerified && macrosPayload !== undefined && !args.adminNutritionEdit) {
         delete updatePayload.cal;
         delete updatePayload.protein;
         delete updatePayload.carbs;

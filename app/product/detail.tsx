@@ -572,6 +572,7 @@ export default function ProductDetailScreen() {
         stores: next.stores,
         dietTags: next.dietTags,
         ...(next.macros !== undefined ? { macros: next.macros } : {}),
+        ...(next.macros !== undefined && isAdmin ? { adminNutritionEdit: true } : {}),
         ...(metadataEditorMode === 'identity' && isAdmin
           ? {
               adminEdit: true,
@@ -1236,7 +1237,8 @@ export default function ProductDetailScreen() {
         categories={profileCategories}
         subcategoryId={profileSubcategoryId}
         macros={profileMacrosForm}
-        macrosLocked={curated?.nutrition_verified === true}
+        // Admins can always edit nutrition, including staff-verified products.
+        macrosLocked={curated?.nutrition_verified === true && !isAdmin}
         saving={metadataSaving}
         onClose={() => {
           if (metadataSaving) return;
