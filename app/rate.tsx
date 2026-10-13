@@ -28,6 +28,7 @@ import {
 import { SubcategoryPickerGrid } from '@/components/bagged/subcategory-picker-grid';
 import { scoreDisplayColor } from '@/components/bagged/score-badge';
 import { SearchResultRow } from '@/components/bagged/search-result-row';
+import { StoreSearchChips } from '@/components/bagged/store-search-chips';
 import { MentionNoteField } from '@/components/bagged/mention-note-field';
 import { TextField } from '@/components/bagged/text-field';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
@@ -41,7 +42,6 @@ import { DietTagChips } from '@/components/bagged/diet-tag-chips';
 import {
   isLegitimateTraderJoesBrand,
   retailStoresForRow,
-  STORES,
   storesForBrandAndSelections,
   TRADER_JOES_STORE,
 } from '@/constants/grocery';
@@ -2005,21 +2005,12 @@ function RadarConfirmStep({
       {tjOnly ? (
         <Text style={styles.stepHint}>Trader Joe&apos;s brand items are only sold at Trader Joe&apos;s.</Text>
       ) : null}
-      <View style={[styles.chipGrid, { marginTop: 8 }]}>
-        {STORES.map((s) => {
-          const active = selectedStores.includes(s);
-          const disabled = tjOnly && s !== TRADER_JOES_STORE;
-          return (
-            <Pressable
-              key={s}
-              onPress={() => onToggleStore(s)}
-              disabled={disabled}
-              style={[styles.chip, active && styles.chipActive, disabled && styles.chipDisabled]}>
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{s}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <StoreSearchChips
+        selectedStores={selectedStores}
+        onToggleStore={onToggleStore}
+        tjOnly={tjOnly}
+        chipStyles={styles}
+      />
       <Text style={[styles.stepHeading, { marginTop: 24 }]}>What type of product is this?</Text>
       <SubcategoryPickerGrid
         layout="stepped"
@@ -2267,21 +2258,12 @@ function ManualEntryStep({
       {tjOnly ? (
         <Text style={styles.stepHint}>Trader Joe&apos;s brand items are only sold at Trader Joe&apos;s.</Text>
       ) : null}
-      <View style={[styles.chipGrid, { marginTop: 8 }]}>
-        {STORES.map((s) => {
-          const active = selectedStores.includes(s);
-          const disabled = tjOnly && s !== TRADER_JOES_STORE;
-          return (
-            <Pressable
-              key={s}
-              onPress={() => onToggleStore(s)}
-              disabled={disabled}
-              style={[styles.chip, active && styles.chipActive, disabled && styles.chipDisabled]}>
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{s}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <StoreSearchChips
+        selectedStores={selectedStores}
+        onToggleStore={onToggleStore}
+        tjOnly={tjOnly}
+        chipStyles={styles}
+      />
 
       <Text style={[styles.fieldLabel, { marginTop: 20 }]}>Product type *</Text>
       <Text style={styles.stepHint}>Category, then the specific type.</Text>

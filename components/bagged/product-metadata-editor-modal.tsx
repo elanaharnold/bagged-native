@@ -12,11 +12,11 @@ import {
 
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
 import { SubcategoryPickerGrid } from '@/components/bagged/subcategory-picker-grid';
+import { StoreSearchChips } from '@/components/bagged/store-search-chips';
 import { DIET_TAGS } from '@/constants/diet-tags';
 import {
   isLegitimateTraderJoesBrand,
   mergeStoresForBrand,
-  STORES,
   TRADER_JOES_STORE,
 } from '@/constants/grocery';
 import type { RateMacroFormState } from '@/lib/data';
@@ -215,25 +215,12 @@ export function ProductMetadataEditorModal({
                     Trader Joe&apos;s brand items are only sold at Trader Joe&apos;s.
                   </Text>
                 ) : null}
-                <View style={styles.chipGrid}>
-                  {STORES.map((s) => {
-                    const active = draftStores.includes(s);
-                    const disabled = tjOnly && s !== TRADER_JOES_STORE;
-                    return (
-                      <Pressable
-                        key={s}
-                        onPress={() => toggleStore(s)}
-                        disabled={disabled}
-                        style={[
-                          styles.chip,
-                          active && styles.chipActive,
-                          disabled && styles.chipDisabled,
-                        ]}>
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>{s}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
+                <StoreSearchChips
+                  selectedStores={draftStores}
+                  onToggleStore={toggleStore}
+                  tjOnly={tjOnly}
+                  chipStyles={styles}
+                />
               </>
             ) : mode === 'diet' ? (
               <View style={styles.chipGrid}>

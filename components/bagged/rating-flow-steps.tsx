@@ -4,11 +4,10 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { AutoFitText } from '@/components/bagged/auto-fit-text';
 import { KeyboardFormScroll } from '@/components/bagged/keyboard-form-scroll';
 import { scoreDisplayColor } from '@/components/bagged/score-badge';
+import { StoreSearchChips } from '@/components/bagged/store-search-chips';
 import { BaggedColors, BaggedFonts } from '@/constants/bagged-theme';
 import {
   isLegitimateTraderJoesBrand,
-  STORES,
-  TRADER_JOES_STORE,
 } from '@/constants/grocery';
 import type { SearchProductRow } from '@/lib/data';
 import { formatProductDisplayName } from '@/lib/format';
@@ -277,21 +276,12 @@ export function VibeStep({
               Trader Joe&apos;s brand items are only sold at Trader Joe&apos;s.
             </Text>
           ) : null}
-          <View style={styles.chipGrid}>
-            {STORES.map((s) => {
-              const active = selectedStores.includes(s);
-              const disabled = tjOnly && s !== TRADER_JOES_STORE;
-              return (
-                <Pressable
-                  key={s}
-                  onPress={() => onToggleStore(s)}
-                  disabled={disabled}
-                  style={[styles.chip, active && styles.chipActive, disabled && styles.chipDisabled]}>
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{s}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <StoreSearchChips
+            selectedStores={selectedStores}
+            onToggleStore={onToggleStore}
+            tjOnly={tjOnly}
+            chipStyles={{ ...styles, chipGrid: [styles.chipGrid, { marginTop: 0 }] }}
+          />
         </>
       ) : null}
       {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
