@@ -37,7 +37,7 @@ import { DIET_TAGS } from '@/constants/diet-tags';
 import {
   collectProductPhotoUrlsFromPosts,
   ensureUserPostForProductPhotos,
-  fetchCommunityPostsForProduct,
+  fetchCommunityPostsAndPhotosForProduct,
   fetchCuratedProductProfileRow,
   getGlobalRankStatsForItem,
   getWantToTry,
@@ -60,6 +60,7 @@ import {
   wantToTryMatchesProduct,
   wantToTryStorePrimary,
   type FeedPostRow,
+  type ProductPhotoOnlyPost,
   type RateMacroFormState,
   type ProductEditSuggestionType,
   type VerifiedCuratedNutrition,
@@ -133,6 +134,8 @@ export default function ProductDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [posts, setPosts] = useState<FeedPostRow[]>([]);
+  /** Photos people added without ranking or saving the product. Not reviews, but shown as photos. */
+  const [photoOnlyPosts, setPhotoOnlyPosts] = useState<ProductPhotoOnlyPost[]>([]);
   const [stats, setStats] = useState<{ avg: number | null; count: number }>({ avg: null, count: 0 });
   const [curated, setCurated] = useState<VerifiedCuratedNutrition | null>(null);
   const [wantToTry, setWantToTry] = useState(false);
@@ -180,18 +183,20 @@ export default function ProductDetailScreen() {
     if (!item) {
       setErrorMsg('Missing product.');
       setPosts([]);
+      setPhotoOnlyPosts([]);
       return;
     }
     setErrorMsg(null);
     try {
-      const [rows, rankStats, nutrition, wantRows] = await Promise.all([
-        fetchCommunityPostsForProduct(item, descriptionKey, brand),
+      const [{ posts: rows, photoOnlyPosts: photoRows }, rankStats, nutrition, wantRows] = await Promise.all([
+        fetchCommunityPostsAndPhotosForProduct(item, descriptionKey, brand),
         getGlobalRankStatsForItem(item, descriptionKey, brand),
         fetchCuratedProductProfileRow(item, brand).catch(() => null),
         userId ? getWantToTry(userId).catch(() => [] as WantToTryItem[]) : Promise.resolve([]),
       ]);
       if (generation !== loadGenerationRef.current) return;
       setPosts(rows);
+      setPhotoOnlyPosts(photoRows);
       setStats(rankStats);
       setCurated(nutrition);
       const catalogSub = String(nutrition?.stored_subcategory ?? '').trim();
@@ -224,6 +229,7 @@ export default function ProductDetailScreen() {
       console.warn('product detail load:', e);
       setErrorMsg(e instanceof Error ? e.message : 'Could not load this product.');
       setPosts([]);
+      setPhotoOnlyPosts([]);
     }
   }, [item, descriptionKey, userId, store, brand]);
 
@@ -356,7 +362,10 @@ export default function ProductDetailScreen() {
   const { showLikers, modal: likersModal } = usePostLikersModal(handleOpenUser);
 
   /** All review photos for this product identity — visible to everyone on the profile. */
-  const allProductPhotos = useMemo(() => collectProductPhotoUrlsFromPosts(posts), [posts]);
+  const allProductPhotos = useMemo(
+    () => collectProductPhotoUrlsFromPosts([...posts, ...photoOnlyPosts]),
+    [posts, photoOnlyPosts]
+  );
 
   const displayBrand = useMemo(
     () =>
@@ -474,7 +483,9 @@ export default function ProductDetailScreen() {
 
   const myPhotoSlot = useMemo(() => {
     if (!userId) return null;
-    const mine = posts.filter((p) => String(p.user_id) === String(userId));
+    const mine = [...posts, ...photoOnlyPosts].filter(
+      (p) => String(p.user_id) === String(userId)
+    );
     if (mine.length === 0) return null;
     const sorted = [...mine].sort((a, b) => {
       const aRanked = !isRadarOnlyDbRow(a) ? 1 : 0;
@@ -486,7 +497,7 @@ export default function ProductDetailScreen() {
       return (Number(b.id) || 0) - (Number(a.id) || 0);
     });
     return sorted[0] ?? null;
-  }, [posts, userId]);
+  }, [posts, photoOnlyPosts, userId]);
 
   /** Prefill the Rate nutrition step when the shared profile has macros. */
   const rateMacroAutofill = useMemo(() => {

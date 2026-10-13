@@ -38,7 +38,7 @@ import {
 import { usernameFromSession } from './auth';
 import { pokeFeedRefresh } from './feed-refresh-poke';
 import { removeStorageObjectsForPostPhotoUrls } from './post-photo-storage';
-import { isFeedVisiblePost, isRankedReviewPost } from './post-feed-visibility';
+import { isFeedVisiblePost, isMetadataOnlyRadarPost, isRankedReviewPost } from './post-feed-visibility';
 import { supabase } from './supabase';
 import {
   canonicalRatingsFromRankedRows,
@@ -1262,7 +1262,9 @@ function dedupePostsByUserItemStore(rows: RawPostForProduct[]): RawPostForProduc
   const score = (row: RawPostForProduct) => {
     const radar = row.radar_only === true;
     const ranked = !radar || hasTriedScore(row.rating);
-    const quality = ranked ? 2 : 0;
+    // A photo-only placeholder must never win over a real want-to-try post, or the
+    // want-to-try gets filtered out later along with the placeholder.
+    const quality = ranked ? 2 : isMetadataOnlyRadarPost(row) ? 0 : 1;
     const ts = new Date(row.created_at ?? 0).getTime();
     const photoN = normalizePhotoUrls(row.photo_urls).length;
     const idNum = Number(row.id) || 0;
@@ -1603,6 +1605,44 @@ export async function fetchProductNutritionForProfile(
 }
 
 /** All deduped community posts for one product identity (newest first). */
+/** A post that only holds product photos (added without ranking or want-to-try). */
+export type ProductPhotoOnlyPost = Pick<
+  FeedPostRow,
+  'id' | 'user_id' | 'photo_urls' | 'created_at' | 'radar_only' | 'rating'
+>;
+
+/**
+ * Community posts for the product page, plus photo-only posts. Photo-only posts aren't reviews,
+ * so they stay out of the review list, but their photos still belong on the product page.
+ */
+export async function fetchCommunityPostsAndPhotosForProduct(
+  itemName: string,
+  descriptionKey = '',
+  brand = ''
+): Promise<{ posts: FeedPostRow[]; photoOnlyPosts: ProductPhotoOnlyPost[] }> {
+  try {
+    const raw = await fetchMergedRawPostsForItem(itemName, descriptionKey, brand);
+    const photoOnlyPosts: ProductPhotoOnlyPost[] = raw
+      .filter((row) => !isFeedVisiblePost(row) && normalizePhotoUrls(row.photo_urls).length > 0)
+      .map((row) => ({
+        id: row.id,
+        user_id: row.user_id,
+        photo_urls: row.photo_urls,
+        created_at: row.created_at,
+        radar_only: row.radar_only,
+        rating: row.rating,
+      }));
+    const posts = await hydrateCommunityPostsForProduct(raw.filter(isFeedVisiblePost));
+    return { posts, photoOnlyPosts };
+  } catch (e) {
+    console.warn(
+      'fetchCommunityPostsAndPhotosForProduct:',
+      (e as { message?: string })?.message ?? e
+    );
+    return { posts: [], photoOnlyPosts: [] };
+  }
+}
+
 export async function fetchCommunityPostsForProduct(
   itemName: string,
   descriptionKey = '',
@@ -1610,24 +1650,28 @@ export async function fetchCommunityPostsForProduct(
 ): Promise<FeedPostRow[]> {
   try {
     const raw = await fetchMergedRawPostsForItem(itemName, descriptionKey, brand);
-    const visible = raw.filter(isFeedVisiblePost);
-    if (visible.length === 0) return [];
-    visible.sort(
-      (a, b) =>
-        new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
-    );
-    const hydrated = await hydratePostsWithProfileAndLikes(visible);
-    const commentCounts = await fetchCommentCountsForPosts(hydrated.map((r) => String(r.id)));
-    const withCounts = hydrated.map((row) => ({
-      ...row,
-      commentCount: commentCounts.get(String(row.id)) ?? 0,
-    }));
-    const enriched = await enrichPostsWithSharedCatalogMetadata(withCounts);
-    return applyCanonicalRatingsToFeedPosts(enriched);
+    return await hydrateCommunityPostsForProduct(raw.filter(isFeedVisiblePost));
   } catch (e) {
     console.warn('fetchCommunityPostsForProduct:', (e as { message?: string })?.message ?? e);
     return [];
   }
+}
+
+async function hydrateCommunityPostsForProduct(
+  visible: RawPostForProduct[]
+): Promise<FeedPostRow[]> {
+  if (visible.length === 0) return [];
+  visible.sort(
+    (a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
+  );
+  const hydrated = await hydratePostsWithProfileAndLikes(visible);
+  const commentCounts = await fetchCommentCountsForPosts(hydrated.map((r) => String(r.id)));
+  const withCounts = hydrated.map((row) => ({
+    ...row,
+    commentCount: commentCounts.get(String(row.id)) ?? 0,
+  }));
+  const enriched = await enrichPostsWithSharedCatalogMetadata(withCounts);
+  return applyCanonicalRatingsToFeedPosts(enriched);
 }
 
 // ─── Notifications (activity on your account) ─────────────────────────────────
