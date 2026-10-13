@@ -1579,6 +1579,42 @@ export async function fetchCuratedProductProfileRow(
 }
 
 /**
+ * Unverified catalog nutrition for rate autofill — macros entered or corrected by users.
+ * Stricter than {@link fetchCuratedProductProfileRow}: when a brand is known the row's brand
+ * must match (no fallback to other brands), and when no brand is known the match must be
+ * unambiguous, so a same-named product from another brand never pre-fills.
+ */
+export async function fetchCommunityCatalogNutrition(
+  description: string,
+  brand = ''
+): Promise<VerifiedCuratedNutrition | null> {
+  const desc = String(description ?? '').trim();
+  if (!desc) return null;
+
+  const rows = await fetchCuratedProductRowsByIdentity(desc, brand);
+  const withMacros = rows.filter(
+    (row) =>
+      String(row.nutrition_verification_state ?? row.nutritionVerification ?? '') !== 'verified' &&
+      curatedRowHasMeaningfulMacros(row)
+  );
+  if (withMacros.length === 0) return null;
+
+  const brandKnown = !isUnknownUserBrand(brand) && Boolean(normalizedBrandKey(brand));
+  if (brandKnown) {
+    const match = withMacros.find((row) =>
+      brandsMatchForProductIdentity(String(row.brand ?? '').trim(), brand)
+    );
+    return match ? shapeCuratedNutritionFromRow(match) : null;
+  }
+
+  const distinctBrands = new Set(
+    withMacros.map((row) => normalizedBrandKey(String(row.brand ?? '').trim()))
+  );
+  if (distinctBrands.size !== 1) return null;
+  return shapeCuratedNutritionFromRow(withMacros[0]);
+}
+
+/**
  * Product-profile nutrition from the shared catalog — verified rows or any
  * unverified row with community-uploaded macros.
  */
@@ -5394,20 +5430,7 @@ export async function resolveMacrosForRateProduct(args: {
   const brand = String(args.brand ?? '').trim();
   if (!item) return { ...EMPTY_RATE_MACRO_FORM };
 
-  if (args.searchRow) {
-    const fromPick = await resolveMacrosForSearchProductRow(args.searchRow);
-    if (rateMacroFormHasAny(fromPick)) {
-      if (__DEV__) {
-        console.log('[FatSecret] rate macros from picked search row', {
-          product: item,
-          match: args.searchRow.description,
-          fatSecretId: args.searchRow.fatSecretId ?? null,
-        });
-      }
-      return fromPick;
-    }
-  }
-
+  // 1. Staff-verified catalog nutrition always wins.
   const curatedVerified = await fetchVerifiedCuratedNutritionByDescription(item).catch(() => null);
   const profileRow = await fetchCuratedProductProfileRow(item, brand).catch(() => null);
   const curated = curatedVerified ?? (profileRow?.nutrition_verified ? profileRow : null);
@@ -5430,6 +5453,42 @@ export async function resolveMacrosForRateProduct(args: {
     }
   }
 
+  // 2. Community catalog nutrition (unverified, but entered or corrected by Bagged users).
+  //    Using it before FatSecret means a correction made once carries over to the next ranker
+  //    instead of being replaced by the same FatSecret guess again.
+  const community = await fetchCommunityCatalogNutrition(item, brand).catch(() => null);
+  if (community) {
+    const fromCommunity = rateMacroFormFromNumbers({
+      cal: community.cal,
+      protein: community.protein,
+      carbs: community.carbs,
+      fat: community.fat,
+      servingLabel: community.serving_label,
+    });
+    if (rateMacroFormHasAny(fromCommunity)) {
+      if (__DEV__) {
+        console.log('[FatSecret] rate macros from community catalog', { product: item, brand });
+      }
+      return fromCommunity;
+    }
+  }
+
+  // 3. The search hit the user picked (FatSecret food.get or row macros).
+  if (args.searchRow) {
+    const fromPick = await resolveMacrosForSearchProductRow(args.searchRow);
+    if (rateMacroFormHasAny(fromPick)) {
+      if (__DEV__) {
+        console.log('[FatSecret] rate macros from picked search row', {
+          product: item,
+          match: args.searchRow.description,
+          fatSecretId: args.searchRow.fatSecretId ?? null,
+        });
+      }
+      return fromPick;
+    }
+  }
+
+  // 4. FatSecret name-based guess (skipped for barcode scans).
   if (args.allowFatSecretGuess === false) return { ...EMPTY_RATE_MACRO_FORM };
 
   const query = buildFatSecretSearchQuery(item, brand);

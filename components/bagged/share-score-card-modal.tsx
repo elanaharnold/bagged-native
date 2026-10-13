@@ -102,7 +102,7 @@ export function ShareScoreCardModal({ visible, data, onClose }: ShareScoreCardMo
     if (!renderData || busy) return;
     setBusy('save');
     try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
+      const { status } = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
       if (status !== 'granted') {
         Alert.alert(
           'Photos access needed',
