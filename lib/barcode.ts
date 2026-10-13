@@ -11,6 +11,7 @@ import {
   type RankedPostRow,
   type SearchProductRow,
 } from '@/lib/data';
+import { mapCategory } from '@/lib/ranking';
 import { supabase } from '@/lib/supabase';
 
 // ─── Barcode normalisation ────────────────────────────────────────────────────
@@ -578,6 +579,36 @@ export function rateParamsForSearchRow(
   if (category) params.prefilledCategory = category;
   if (intent === 'want') params.prefilledIntent = 'want';
 
+  const macros = rateMacroFormFromNumbers({
+    cal: row.cal,
+    protein: row.protein,
+    carbs: row.carbs,
+    fat: row.fat,
+    servingLabel: row.servingLabel,
+  });
+  if (rateMacroFormHasAny(macros)) Object.assign(params, rateMacroFormToPrefillParams(macros));
+  return params;
+}
+
+/**
+ * Route params for opening a search or scan result on the product page. The page looks the
+ * product up by name and brand; the nutrition here is only a fallback for products nobody on
+ * Bagged has posted yet (e.g. an Open Food Facts scan), so the page isn't blank.
+ */
+export function productDetailParamsForSearchRow(
+  row: SearchProductRow,
+  source: 'scan' | 'search'
+): Record<string, string> {
+  const brand = searchRowBrand(row);
+  const params: Record<string, string> = {
+    item: row.description,
+    brand,
+    category: mapCategory(cleanText(row.foodCategory) || row.description),
+    descriptionKey: cleanText(row.descriptionKey) || productDescriptionKey(row.description, brand),
+    // Existing want-to-try source values only; entrySource tells scan and search apart.
+    wantSource: 'search',
+    entrySource: source,
+  };
   const macros = rateMacroFormFromNumbers({
     cal: row.cal,
     protein: row.protein,

@@ -43,6 +43,7 @@ import {
   getWantToTry,
   isAdminUsername,
   isRadarOnlyDbRow,
+  normalizeMacros,
   profileIsVerifiedAmbassador,
   normalizePhotoUrls,
   normalizedDescriptionKeyFromItem,
@@ -108,6 +109,16 @@ export default function ProductDetailScreen() {
     brand?: string;
     descriptionKey?: string;
     wantSource?: string;
+    /** 'scan' or 'search' when opened from the + button flow. */
+    entrySource?: string;
+    /** 'open_food_facts' when the fallback info below came from Open Food Facts. */
+    infoSource?: string;
+    /** Fallback nutrition from the scan/search result, for products nobody has posted yet. */
+    prefilledMacroCal?: string;
+    prefilledMacroProtein?: string;
+    prefilledMacroCarbs?: string;
+    prefilledMacroFat?: string;
+    prefilledMacroServing?: string;
   }>();
 
   const item = String(params.item ?? '').trim();
@@ -419,10 +430,33 @@ export default function ProductDetailScreen() {
     return item;
   }, [posts, item]);
 
-  const macroSource = useMemo(
+  const routeMacros = useMemo(
+    () =>
+      normalizeMacros({
+        cal: params.prefilledMacroCal,
+        protein: params.prefilledMacroProtein,
+        carbs: params.prefilledMacroCarbs,
+        fat: params.prefilledMacroFat,
+        servingLabel: params.prefilledMacroServing,
+      }),
+    [
+      params.prefilledMacroCal,
+      params.prefilledMacroProtein,
+      params.prefilledMacroCarbs,
+      params.prefilledMacroFat,
+      params.prefilledMacroServing,
+    ]
+  );
+
+  const communityMacros = useMemo(
     () => resolveProductProfileMacros({ curated, posts }),
     [curated, posts]
   );
+
+  /** Bagged's own nutrition wins; the scan/search result fills in for brand-new products. */
+  const macroSource = communityMacros ?? routeMacros;
+  const macrosFromOpenFoodFacts =
+    !communityMacros && !!routeMacros && params.infoSource === 'open_food_facts';
 
   const profileMacrosForm = useMemo((): RateMacroFormState => {
     if (!macroSource) return EMPTY_MACROS;
@@ -456,7 +490,7 @@ export default function ProductDetailScreen() {
 
   /** Prefill the Rate nutrition step when the shared profile has macros. */
   const rateMacroAutofill = useMemo(() => {
-    const m = resolveProductProfileMacros({ curated, posts });
+    const m = resolveProductProfileMacros({ curated, posts }) ?? routeMacros;
     if (!m) return null;
     return rateMacroFormFromNumbers(
       {
@@ -471,7 +505,7 @@ export default function ProductDetailScreen() {
         allowIntentionalAllZeros: true,
       }
     );
-  }, [curated, posts]);
+  }, [curated, posts, routeMacros]);
 
   const dietTagIds = useMemo(() => {
     if (curated != null) return curated.diet_tags ?? [];
@@ -718,6 +752,8 @@ export default function ProductDetailScreen() {
       prefilledItem: item,
       prefilledBrand: displayBrand,
     };
+    // Barcode products: the rate screen must not swap in nutrition from a fuzzy name match.
+    if (params.entrySource === 'scan') rateParams.prefilledSource = 'scan';
     if (displayCategory) rateParams.prefilledCategory = displayCategory;
     if (displayStores.length > 0) rateParams.prefilledStores = displayStores.join(',');
     if (profileDietTags.length > 0) rateParams.prefilledDietTags = profileDietTags.join(',');
@@ -1070,6 +1106,9 @@ export default function ProductDetailScreen() {
                 <View style={styles.macrosCenter}>
                   <MacrosPills macros={macroSource} />
                 </View>
+                {macrosFromOpenFoodFacts ? (
+                  <Text style={styles.sourceNote}>Nutrition from Open Food Facts</Text>
+                ) : null}
               </>
             ) : userId ? (
               <Text style={styles.photosEmptyHint}>
@@ -1117,7 +1156,11 @@ export default function ProductDetailScreen() {
           {loading ? (
             <ActivityIndicator style={styles.listSpinner} color={BaggedColors.onBg} />
           ) : communityReviews.length === 0 ? (
-            <Text style={styles.emptyReviews}>No one else has posted this product yet.</Text>
+            <Text style={styles.emptyReviews}>
+              {myRankedPost || myRadarPost
+                ? 'No one else has posted this product yet.'
+                : 'No reviews yet. Be the first to rank it.'}
+            </Text>
           ) : (
             communityReviews.map((p) => (
               <ReviewRow
@@ -1141,7 +1184,7 @@ export default function ProductDetailScreen() {
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 14) }]}>
         <Pressable onPress={goRate} style={styles.btnPrimary}>
-          <Text style={styles.btnPrimaryText}>{myRankedPost ? 'Re-rank' : 'Rate This'}</Text>
+          <Text style={styles.btnPrimaryText}>{myRankedPost ? 'Re-rank' : 'Rank it'}</Text>
         </Pressable>
         {canAddPhotos ? (
           <Pressable
@@ -1624,6 +1667,12 @@ const styles = StyleSheet.create({
     color: BaggedColors.onBgMuted,
   },
   listSpinner: { marginVertical: 20 },
+  sourceNote: {
+    textAlign: 'center',
+    fontFamily: BaggedFonts.body,
+    fontSize: 11,
+    color: BaggedColors.onBgMuted,
+  },
   emptyReviews: {
     fontFamily: BaggedFonts.body,
     fontSize: 14,

@@ -660,7 +660,7 @@ export default function MyListScreen() {
             body={
               searchQuery.trim() || parentFilter || subcategoryFilter
                 ? 'Try a different filter or search term.'
-                : 'Tap the + button → Want to try, or save items from the feed.'
+                : 'Search or scan a product, then tap Want to Try. You can also save items from the feed.'
             }
           />
         ) : (

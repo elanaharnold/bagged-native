@@ -115,9 +115,11 @@ import {
   useReviewPhotoPicker,
 } from '@/lib/review-photos';
 import { legacyCategoryForSubcategory, getSubcategory, mapLegacyCategoryToSubcategory, subcategoryForRow } from '@/constants/categories';
+import { productDetailParamsForSearchRow } from '@/lib/barcode';
 import { useAuth } from '@/providers/auth-provider';
 
 type Step =
+  /** Only shown for "Add manually": tried it or want to try it. */
   | 'intent'
   | 'search'
   | 'manual_entry'
@@ -204,7 +206,8 @@ export default function RateScreen() {
   const [step, setStep] = useState<Step>(() => {
     if (params.prefilledItem) return params.prefilledIntent === 'want' ? 'radar_confirm' : 'subcategory';
     if (params.rerankPostId) return 'vibe';
-    return 'intent';
+    // Fresh entry from the + button: search (or scan) first, then the product page.
+    return 'search';
   });
   const [entryIntent, setEntryIntent] = useState<EntryIntent | null>(() =>
     params.prefilledItem && params.prefilledIntent === 'want' ? 'want' : null
@@ -569,7 +572,8 @@ export default function RateScreen() {
 
   const hasPrefilledStart = Boolean(params.prefilledItem);
   const hasRerankStart = Boolean(params.rerankPostId);
-  const showIntentStep = !hasPrefilledStart && !hasRerankStart;
+  /** Opened from the + button with nothing picked yet: results open the product page. */
+  const isBrowseEntry = !hasPrefilledStart && !hasRerankStart;
 
   const rateStartedLoggedRef = useRef(false);
   useEffect(() => {
@@ -620,15 +624,15 @@ export default function RateScreen() {
     setErrorMsg(null);
     switch (step) {
       case 'intent':
-        router.back();
+        setStep('search');
         break;
       case 'search':
-        if (showIntentStep) setStep('intent');
-        else router.back();
+        router.back();
         break;
       case 'manual_entry':
       case 'radar_confirm':
         resetProductSelection();
+        if (isBrowseEntry) setEntryIntent(null);
         setStep('search');
         break;
       case 'subcategory':
@@ -676,7 +680,7 @@ export default function RateScreen() {
     }
   }, [
     step,
-    showIntentStep,
+    isBrowseEntry,
     hasPrefilledStart,
     hasRerankStart,
     noteBackStep,
@@ -875,7 +879,7 @@ export default function RateScreen() {
     );
   };
 
-  const openManualEntry = useCallback(() => {
+  const beginManualEntry = useCallback(() => {
     const name = query.trim();
     if (!name) return;
     setErrorMsg(null);
@@ -893,6 +897,17 @@ export default function RateScreen() {
     setResults([]);
     setStep('manual_entry');
   }, [query, entryIntent]);
+
+  /** From search with no intent yet: ask tried / want first, since the form differs. */
+  const openManualEntry = useCallback(() => {
+    if (!query.trim()) return;
+    if (entryIntent == null) {
+      setErrorMsg(null);
+      setStep('intent');
+      return;
+    }
+    beginManualEntry();
+  }, [query, entryIntent, beginManualEntry]);
 
   const toggleManualStore = useCallback(
     (s: string) => {
@@ -1056,6 +1071,18 @@ export default function RateScreen() {
 
   const pickFromSearch = useCallback(
     async (row: SearchProductRow) => {
+      if (isBrowseEntry && entryIntent == null) {
+        logEvent('search_result_picked', {
+          source: row.isCurated ? 'catalog' : row.fatSecretId ? 'fatsecret' : 'other',
+          has_brand: Boolean(searchRowBrand(row)),
+          product_opened_from: 'search',
+        });
+        router.push({
+          pathname: '/product/detail',
+          params: productDetailParamsForSearchRow(row, 'search'),
+        });
+        return;
+      }
       const brand = searchRowBrand(row);
       if (
         !snapshotLoading &&
@@ -1119,7 +1146,7 @@ export default function RateScreen() {
         setStep('subcategory');
       }
     },
-    [entryIntent, rankedSnapshot, snapshotLoading, duplicateExcludeId]
+    [entryIntent, rankedSnapshot, snapshotLoading, duplicateExcludeId, isBrowseEntry, router]
   );
 
   const toggleRadarStore = useCallback(
@@ -1611,7 +1638,9 @@ export default function RateScreen() {
                 ? 'Add manually'
                 : entryIntent === 'want'
                   ? 'Want to Try'
-                  : 'Rate'}
+                  : isBrowseEntry && entryIntent == null
+                    ? 'Find a product'
+                    : 'Rank it'}
         </Text>
         <Pressable
           onPress={() => router.back()}
@@ -1629,15 +1658,15 @@ export default function RateScreen() {
         style={styles.flex}>
         {step === 'intent' ? (
           <IntentStep
+            productName={query.trim()}
             onTried={() => {
               setEntryIntent('tried');
-              setStep('search');
+              beginManualEntry();
             }}
             onWant={() => {
               setEntryIntent('want');
-              setStep('search');
+              beginManualEntry();
             }}
-            onScan={() => router.replace('/scan')}
           />
         ) : null}
 
@@ -1648,8 +1677,13 @@ export default function RateScreen() {
             results={results}
             loading={searching}
             placeholder={
-              entryIntent === 'want' ? 'Find something to try' : 'Find a product to rate'
+              isBrowseEntry
+                ? 'Search for a product'
+                : entryIntent === 'want'
+                  ? 'Find something to try'
+                  : 'Find a product to rate'
             }
+            onScan={() => router.replace('/scan')}
             onPick={pickFromSearch}
             onManualEntry={openManualEntry}
             isAlreadyRanked={(row) =>
@@ -1895,17 +1929,20 @@ export default function RateScreen() {
 // ─── Step components ──────────────────────────────────────────────────────────
 
 function IntentStep({
+  productName,
   onTried,
   onWant,
-  onScan,
 }: {
+  productName: string;
   onTried: () => void;
   onWant: () => void;
-  onScan: () => void;
 }) {
   return (
     <KeyboardFormScroll contentContainerStyle={styles.stepContent}>
-      <Text style={styles.stepHeading}>What are you adding?</Text>
+      <Text style={styles.stepHeading}>
+        {productName ? `Adding "${productName}"` : 'Adding a product'}
+      </Text>
+      <Text style={styles.stepHint}>Have you tried it yet?</Text>
       <Pressable onPress={onTried} style={styles.intentCardDark}>
         <Text style={styles.intentTitleLight}>I&apos;ve tried it</Text>
         <Text style={styles.intentSubLight}>Rank it, tag it, and post to the feed</Text>
@@ -1913,10 +1950,6 @@ function IntentStep({
       <Pressable onPress={onWant} style={styles.intentCardAccent}>
         <Text style={styles.intentTitleAccent}>Want to try</Text>
         <Text style={styles.intentSubAccent}>Save for later and share on the feed</Text>
-      </Pressable>
-      <Pressable onPress={onScan} style={styles.intentCardScan}>
-        <Text style={styles.intentTitleScan}>Scan a barcode</Text>
-        <Text style={styles.intentSubScan}>Point your camera at the item to find it fast</Text>
       </Pressable>
     </KeyboardFormScroll>
   );
@@ -2042,6 +2075,7 @@ function SearchStep({
   results,
   loading,
   placeholder,
+  onScan,
   onPick,
   onManualEntry,
   isAlreadyRanked,
@@ -2051,6 +2085,7 @@ function SearchStep({
   results: SearchProductRow[];
   loading: boolean;
   placeholder: string;
+  onScan?: () => void;
   onPick: (row: SearchProductRow) => void | Promise<void>;
   onManualEntry: () => void;
   isAlreadyRanked?: (row: SearchProductRow) => boolean;
@@ -2076,15 +2111,27 @@ function SearchStep({
 
   return (
     <View style={styles.stepFlex}>
-      <View style={styles.searchBox}>
-        <TextField
-          value={query}
-          onChangeText={setQuery}
-          placeholder={placeholder}
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoFocus
-        />
+      <View style={[styles.searchBox, onScan && styles.searchBoxRow]}>
+        <View style={styles.flex}>
+          <TextField
+            value={query}
+            onChangeText={setQuery}
+            placeholder={placeholder}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus
+          />
+        </View>
+        {onScan ? (
+          <Pressable
+            onPress={onScan}
+            style={({ pressed }) => [styles.scanBtn, pressed && styles.scanBtnPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Scan a barcode"
+            hitSlop={6}>
+            <Ionicons name="barcode-outline" size={24} color={BaggedColors.dark} />
+          </Pressable>
+        ) : null}
       </View>
       <FlatList
         data={results}
@@ -2906,25 +2953,23 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: BaggedColors.green,
   },
-  intentCardScan: {
-    marginTop: 12,
-    padding: 18,
-    borderRadius: 14,
+  searchBoxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scanBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
     borderWidth: 1.5,
     borderColor: BaggedColors.dark,
     backgroundColor: BaggedColors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  intentTitleScan: {
-    fontFamily: BaggedFonts.display,
-    fontSize: 17,
-    fontWeight: '700',
-    color: BaggedColors.dark,
-  },
-  intentSubScan: {
-    fontFamily: BaggedFonts.body,
-    fontSize: 12,
-    color: BaggedColors.muted,
-    marginTop: 4,
+  scanBtnPressed: {
+    opacity: 0.7,
   },
   intentCardDark: {
     marginTop: 16,

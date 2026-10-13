@@ -26,7 +26,7 @@ import {
   linkBarcodeToProduct,
   lookupBarcode,
   normalizeScan,
-  rateParamsForSearchRow,
+  productDetailParamsForSearchRow,
   reportSameProduct,
   type BarcodeSource,
   type ScannedBarcode,
@@ -46,19 +46,12 @@ type Phase =
   | { name: 'scanning' }
   | { name: 'looking_up'; scan: ScannedBarcode }
   | {
-      name: 'match';
-      scan: ScannedBarcode;
-      source: BarcodeSource;
-      row: SearchProductRow;
-      /** Save the barcode → product link when the user moves on (Open Food Facts hits). */
-      needsLink: boolean;
-    }
-  | {
       /** The scanned product looks like one the user already ranked: ask before assuming. */
       name: 'confirm_existing';
       scan: ScannedBarcode;
       source: BarcodeSource;
       row: SearchProductRow;
+      /** Save the barcode → product link when the user moves on (Open Food Facts hits). */
       needsLink: boolean;
       existing: RankedPostRow;
     }
@@ -105,6 +98,19 @@ export default function ScanScreen() {
     if (!result.granted) logEvent('scan_permission', { status: 'denied' });
   }, [requestPermission]);
 
+  /** A scan always lands on the product page: reviews first, then Rank it / Want to try. */
+  const openScannedProduct = useCallback(
+    (args: { scan: ScannedBarcode; source: BarcodeSource; row: SearchProductRow; needsLink: boolean }) => {
+      logEvent('scan_to_product', { source: args.source, product_opened_from: 'scan' });
+      if (args.needsLink) void linkBarcodeToProduct({ gtin: args.scan.gtin, row: args.row });
+      const params = productDetailParamsForSearchRow(args.row, 'scan');
+      // Open Food Facts data needs credit wherever we show it.
+      if (args.source === 'open_food_facts') params.infoSource = 'open_food_facts';
+      router.replace({ pathname: '/product/detail', params });
+    },
+    [router]
+  );
+
   const runLookup = useCallback(async (scan: ScannedBarcode) => {
     setPhase({ name: 'looking_up', scan });
     const result = await lookupBarcode(scan);
@@ -112,7 +118,7 @@ export default function ScanScreen() {
     if (result.kind === 'match') {
       logEvent('scan_matched', { source: result.source });
       const needsLink = result.source === 'open_food_facts';
-      // Before offering to rate it, check whether the user already ranked this product
+      // Before opening it, check whether the user already ranked this product
       // under a slightly different name (search results and barcode databases word things differently).
       const existing = userId ? await findSimilarRankedPost(userId, result.row) : null;
       if (!mountedRef.current) return;
@@ -128,7 +134,7 @@ export default function ScanScreen() {
         });
         return;
       }
-      setPhase({ name: 'match', scan, source: result.source, row: result.row, needsLink });
+      openScannedProduct({ scan, source: result.source, row: result.row, needsLink });
     } else if (result.kind === 'none') {
       logEvent('scan_not_found', { barcode: scan.gtin });
       setPhase({ name: 'not_found', scan });
@@ -136,7 +142,7 @@ export default function ScanScreen() {
       logEvent('scan_lookup_error', { barcode: scan.gtin });
       setPhase({ name: 'error', scan, message: result.message });
     }
-  }, [userId]);
+  }, [userId, openScannedProduct]);
 
   const onScanned = useCallback(
     (result: BarcodeScanningResult) => {
@@ -155,16 +161,6 @@ export default function ScanScreen() {
     lockRef.current = false;
     setPhase({ name: 'scanning' });
   }, []);
-
-  const goRate = useCallback(
-    (intent: 'tried' | 'want') => {
-      if (phase.name !== 'match') return;
-      logEvent('scan_to_rate', { source: phase.source, intent });
-      if (phase.needsLink) void linkBarcodeToProduct({ gtin: phase.scan.gtin, row: phase.row });
-      router.replace({ pathname: '/rate', params: rateParamsForSearchRow(phase.row, intent) });
-    },
-    [phase, router]
-  );
 
   /**
    * "Yes, same product": the scanner's name is the one we keep on the barcode, the user's post is
@@ -190,27 +186,27 @@ export default function ScanScreen() {
     });
   }, [phase, router]);
 
-  /** "No, different product": carry on with the scanned product as before. */
+  /** "No, different product": open the scanned product's own page. */
   const rejectExisting = useCallback(() => {
     if (phase.name !== 'confirm_existing') return;
     logEvent('scan_already_ranked_rejected', { source: phase.source });
-    setPhase({
-      name: 'match',
+    openScannedProduct({
       scan: phase.scan,
       source: phase.source,
       row: phase.row,
       needsLink: phase.needsLink,
     });
-  }, [phase]);
+  }, [phase, openScannedProduct]);
 
   const pickFromSearch = useCallback(
     (row: SearchProductRow) => {
       if (phase.name !== 'not_found') return;
       logEvent('scan_linked_product');
+      // Link now (not on open) so the next scan of this barcode finds it.
       void linkBarcodeToProduct({ gtin: phase.scan.gtin, row });
-      setPhase({ name: 'match', scan: phase.scan, source: 'community', row, needsLink: false });
+      openScannedProduct({ scan: phase.scan, source: 'community', row, needsLink: false });
     },
-    [phase]
+    [phase, openScannedProduct]
   );
 
   const addManually = useCallback(() => {
@@ -238,7 +234,7 @@ export default function ScanScreen() {
           <Text style={styles.permissionTitle}>Scan a barcode</Text>
           <Text style={styles.permissionText}>
             Bagged uses your camera to read the barcode on a snack or grocery item so you can
-            rate it in seconds. Nothing is recorded or saved.
+            look it up in seconds. Nothing is recorded or saved.
           </Text>
           {permission.canAskAgain ? (
             <PrimaryButton label="Allow camera" onPress={() => void handleAllowCamera()} />
@@ -308,7 +304,7 @@ export default function ScanScreen() {
           </Pressable>
         </View>
 
-        {phase.name !== 'match' && phase.name !== 'confirm_existing' ? (
+        {phase.name !== 'confirm_existing' ? (
           <View style={styles.frameWrap} pointerEvents="none">
             <View style={styles.frame} />
             <Text style={styles.hint}>
@@ -345,26 +341,6 @@ export default function ScanScreen() {
           </View>
         ) : null}
 
-        {phase.name === 'match' ? (
-          <View style={styles.matchCard}>
-            <Text style={styles.matchLabel}>Found it</Text>
-            <Text style={styles.matchName}>{formatProductDisplayName(phase.row.description)}</Text>
-            {searchRowBrand(phase.row) ? (
-              <Text style={styles.matchBrand}>{searchRowBrand(phase.row)}</Text>
-            ) : null}
-            {typeof phase.row.ratedCount === 'number' && phase.row.ratedCount > 0 ? (
-              <Text style={styles.matchMeta}>Rated by {phase.row.ratedCount} on Bagged</Text>
-            ) : null}
-            <View style={styles.matchActions}>
-              <PrimaryButton label="Rate it" onPress={() => goRate('tried')} />
-              <PrimaryButton label="Want to try" variant="secondary" onPress={() => goRate('want')} />
-              <PrimaryButton label="Scan another" variant="ghost" onPress={rescan} />
-            </View>
-            {phase.source === 'open_food_facts' ? (
-              <Text style={styles.attribution}>Product info from Open Food Facts</Text>
-            ) : null}
-          </View>
-        ) : null}
       </SafeAreaView>
     </View>
   );
@@ -524,13 +500,6 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   matchActions: { marginTop: 16, gap: 8 },
-  attribution: {
-    marginTop: 10,
-    textAlign: 'center',
-    fontFamily: BaggedFonts.body,
-    fontSize: 11,
-    color: BaggedColors.muted,
-  },
   centeredDark: {
     flex: 1,
     backgroundColor: '#000000',
