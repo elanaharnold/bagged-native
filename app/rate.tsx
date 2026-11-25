@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -27,6 +27,9 @@ import {
 } from '@/components/bagged/rating-flow-steps';
 import { SubcategoryPickerGrid } from '@/components/bagged/subcategory-picker-grid';
 import { scoreDisplayColor } from '@/components/bagged/score-badge';
+import { ScoreExplainer } from '@/components/bagged/score-explainer';
+import { BoxProgress } from '@/components/bagged/box-progress';
+import { fetchMyBoxes, searchRowsForBoxItems, unrankedBoxItems, type MyBox } from '@/lib/boxes';
 import { SearchResultRow } from '@/components/bagged/search-result-row';
 import { StoreSearchChips } from '@/components/bagged/store-search-chips';
 import { MentionNoteField } from '@/components/bagged/mention-note-field';
@@ -312,6 +315,33 @@ export default function RateScreen() {
     );
 
   // ─── Search step ────────────────────────────────────────────────────────────
+  // Bagged box: unranked items from boxes the user has claimed, shown as a quick list.
+  const [myBoxes, setMyBoxes] = useState<MyBox[]>([]);
+  const [boxQuickRows, setBoxQuickRows] = useState<SearchProductRow[]>([]);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const boxes = await fetchMyBoxes();
+        const rows = await searchRowsForBoxItems(unrankedBoxItems(boxes));
+        if (cancelled) return;
+        setMyBoxes(boxes);
+        setBoxQuickRows(rows);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
+  const openBoxes = myBoxes.filter((b) => !b.isComplete);
+  const boxSummary =
+    openBoxes.length > 0
+      ? {
+          rankedCount: openBoxes.reduce((n, b) => n + b.rankedCount, 0),
+          total: openBoxes.reduce((n, b) => n + b.total, 0),
+        }
+      : null;
+
   const [query, setQuery] = useState(() =>
     scanBarcode ? String(firstRouteParam(params.scanQuery) ?? '').trim() : ''
   );
@@ -1784,6 +1814,10 @@ export default function RateScreen() {
                   : 'Find a product to rate'
             }
             onScan={() => router.replace('/scan')}
+            onAddBox={() => router.push('/box/claim')}
+            onOpenBox={() => router.push('/box')}
+            boxQuickRows={boxQuickRows}
+            boxSummary={boxSummary}
             rankedRowsOpenProduct={isBrowseEntry && entryIntent == null}
             onPick={pickFromSearch}
             onManualEntry={openManualEntry}
@@ -2177,6 +2211,10 @@ function SearchStep({
   onManualEntry,
   isAlreadyRanked,
   rankedRowsOpenProduct = false,
+  onAddBox,
+  onOpenBox,
+  boxQuickRows = [],
+  boxSummary = null,
 }: {
   query: string;
   setQuery: (v: string) => void;
@@ -2189,8 +2227,29 @@ function SearchStep({
   isAlreadyRanked?: (row: SearchProductRow) => boolean;
   /** Browsing from the + button: ranked items still open their product page. */
   rankedRowsOpenProduct?: boolean;
+  onAddBox?: () => void;
+  onOpenBox?: () => void;
+  /** Unranked items from the user's Bagged box, shown before they type. */
+  boxQuickRows?: SearchProductRow[];
+  boxSummary?: { rankedCount: number; total: number } | null;
 }) {
   const q = query.trim();
+  const showBoxList = q.length < 2 && boxQuickRows.length > 0;
+  const boxHeader = showBoxList ? (
+    <View style={styles.boxSection}>
+      <View style={styles.boxSectionTop}>
+        <Text style={styles.boxSectionTitle}>From your box</Text>
+        {onOpenBox ? (
+          <Pressable onPress={onOpenBox} hitSlop={8}>
+            <Text style={styles.boxSectionLink}>See box</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      {boxSummary ? (
+        <BoxProgress rankedCount={boxSummary.rankedCount} total={boxSummary.total} compact />
+      ) : null}
+    </View>
+  ) : null;
   const showManual = q.length >= 2 && !loading;
 
   const manualFooter = showManual ? (
@@ -2233,8 +2292,20 @@ function SearchStep({
           </Pressable>
         ) : null}
       </View>
+      {onAddBox ? (
+        <Pressable
+          onPress={onAddBox}
+          style={({ pressed }) => [styles.addBoxBtn, pressed && styles.scanBtnPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Add a box">
+          <Ionicons name="cube-outline" size={20} color={BaggedColors.dark} />
+          <Text style={styles.addBoxText}>Add a box</Text>
+          <Text style={styles.addBoxSub}>Scan the code on your Bagged box</Text>
+        </Pressable>
+      ) : null}
       <FlatList
-        data={results}
+        data={showBoxList ? boxQuickRows : results}
+        ListHeaderComponent={boxHeader}
         keyExtractor={(item, idx) =>
           `${item.descriptionKey ?? item.description}-${item.fatSecretId ?? ''}-${idx}`
         }
@@ -2831,6 +2902,7 @@ function NoteStep({
           </Text>
         </View>
       ) : null}
+      {typeof placedRating === 'number' ? <ScoreExplainer /> : null}
       <Text style={styles.stepHeading}>Add a note (optional)</Text>
       <Text style={styles.stepHint}>
         Tell your followers what you thought — tag friends with @username.
@@ -3046,6 +3118,25 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: BaggedColors.green,
   },
+  addBoxBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: BaggedColors.dark,
+    backgroundColor: BaggedColors.white,
+  },
+  addBoxText: { fontFamily: BaggedFonts.body, fontSize: 15, fontWeight: '700', color: BaggedColors.dark },
+  addBoxSub: { flex: 1, fontFamily: BaggedFonts.body, fontSize: 12, color: BaggedColors.muted, textAlign: 'right' },
+  boxSection: { gap: 8, paddingTop: 8, paddingBottom: 12 },
+  boxSectionTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  boxSectionTitle: { fontFamily: BaggedFonts.display, fontSize: 18, color: BaggedColors.dark },
+  boxSectionLink: { fontFamily: BaggedFonts.body, fontSize: 13, fontWeight: '600', color: BaggedColors.accent },
   searchBoxRow: {
     flexDirection: 'row',
     alignItems: 'center',
