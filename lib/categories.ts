@@ -3,6 +3,7 @@ import { getParentCategory, getSubcategory, subcategoryForRow } from '../constan
 
 export const BAGGED_CATEGORIES = [
   'Snacks',
+  'Pantry',
   'Dairy',
   'Dairy Alt',
   'Meat & Seafood',

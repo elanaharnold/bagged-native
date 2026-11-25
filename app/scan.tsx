@@ -228,10 +228,22 @@ export default function ScanScreen() {
     [phase, openScannedProduct]
   );
 
-  const addManually = useCallback(() => {
-    logEvent('scan_manual_add');
-    router.replace('/rate');
-  }, [router]);
+  /**
+   * Manual add from a no-match (or failed) scan. The barcode rides along to the rate flow,
+   * which links it once the product is saved; backing out writes nothing.
+   * scan_manual_add itself is logged there, with whether the barcode got linked.
+   */
+  const addManually = useCallback(
+    (typedQuery?: string) => {
+      if (phase.name !== 'not_found' && phase.name !== 'error') return;
+      logEvent('scan_manual_add_opened');
+      router.replace({
+        pathname: '/rate',
+        params: { scanBarcode: phase.scan.gtin, scanQuery: (typedQuery ?? '').trim() },
+      });
+    },
+    [phase, router]
+  );
 
   // ─── Permission gates ─────────────────────────────────────────────────────
   if (!permission) {
@@ -285,7 +297,7 @@ export default function ScanScreen() {
             <Text style={styles.sheetText}>{phase.message}</Text>
             <PrimaryButton label="Try again" onPress={() => void runLookup(phase.scan)} />
             <PrimaryButton label="Scan another" variant="secondary" onPress={rescan} />
-            <PrimaryButton label="Search instead" variant="ghost" onPress={addManually} />
+            <PrimaryButton label="Add it manually" variant="ghost" onPress={() => addManually()} />
           </View>
         ) : (
           <NotFoundSearch
@@ -372,7 +384,7 @@ function NotFoundSearch({
 }: {
   onPick: (row: SearchProductRow) => void;
   onRescan: () => void;
-  onManual: () => void;
+  onManual: (typedQuery: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const debounced = useDebounce(query, 350);
@@ -415,6 +427,13 @@ function NotFoundSearch({
       <Text style={styles.sheetText}>
         Search for it once and the next scan will find it for everyone.
       </Text>
+      {results.length === 0 ? (
+        <PrimaryButton
+          label="Can't find it? Add it manually"
+          variant="secondary"
+          onPress={() => onManual(query)}
+        />
+      ) : null}
       <TextInput
         value={query}
         onChangeText={setQuery}
@@ -432,13 +451,17 @@ function NotFoundSearch({
         keyExtractor={(item, idx) => `${item.descriptionKey ?? item.description}-${item.fatSecretId ?? ''}-${idx}`}
         keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => <SearchResultRow row={item} onPress={onPick} />}
-        ListFooterComponent={
-          <View style={styles.footerActions}>
-            <PrimaryButton label="Add it manually" variant="secondary" onPress={onManual} />
-            <PrimaryButton label="Scan another" variant="ghost" onPress={onRescan} />
-          </View>
-        }
       />
+      <View style={styles.footerActions}>
+        {results.length > 0 ? (
+          <PrimaryButton
+            label="Can't find it? Add it manually"
+            variant="secondary"
+            onPress={() => onManual(query)}
+          />
+        ) : null}
+        <PrimaryButton label="Scan another" variant="ghost" onPress={onRescan} />
+      </View>
     </View>
   );
 }

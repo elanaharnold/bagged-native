@@ -1,6 +1,6 @@
 import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 
 import { fetchProfileById } from '@/lib/data';
@@ -43,7 +43,7 @@ function navigateFromPush(router: ReturnType<typeof useRouter>, data: PushData) 
     return;
   }
   if (kind === 'feed') {
-    router.push('/(tabs)/index');
+    router.push('/(tabs)/index' as Href);
     return;
   }
   if (data.postId && (kind === 'comment' || kind === 'comment_reply' || kind === 'like')) {

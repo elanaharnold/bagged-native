@@ -68,6 +68,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withAndroidProjectName",
       [
         "expo-notifications",
         {

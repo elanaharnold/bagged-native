@@ -767,6 +767,9 @@ export default function ProductDetailScreen() {
     // Barcode products: the rate screen must not swap in nutrition from a fuzzy name match.
     if (params.entrySource === 'scan') rateParams.prefilledSource = 'scan';
     if (displayCategory) rateParams.prefilledCategory = displayCategory;
+    // Pass the real subcategory so the rate screen doesn't fall back to the parent's default (e.g. Snacks -> chips).
+    const rateSubcategoryId = profileSubcategoryId ?? displaySubcategoryId;
+    if (rateSubcategoryId) rateParams.prefilledSubcategory = rateSubcategoryId;
     if (displayStores.length > 0) rateParams.prefilledStores = displayStores.join(',');
     if (profileDietTags.length > 0) rateParams.prefilledDietTags = profileDietTags.join(',');
     if (rateMacroAutofill && rateMacroFormHasAny(rateMacroAutofill)) {

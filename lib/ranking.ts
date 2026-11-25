@@ -74,6 +74,7 @@ export function isDisplayableBaggedScore(rating: unknown): rating is number {
 
 export const CATEGORIES = [
   'Snacks',
+  'Pantry',
   'Dairy',
   'Dairy Alt',
   'Meat & Seafood',

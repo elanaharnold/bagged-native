@@ -1,4 +1,5 @@
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -57,7 +58,7 @@ import { useShareScoreCard } from '@/providers/share-score-card-provider';
 
 export default function FeedScreen() {
   const router = useRouter();
-  const navigation = useNavigation();
+  const navigation = useNavigation<BottomTabNavigationProp<Record<string, undefined>>>();
   const { userId, username, session } = useAuth();
   const { openShareScoreCard } = useShareScoreCard();
   const { showFeedDietBar, showMacroNutrition } = useDisplaySettings();

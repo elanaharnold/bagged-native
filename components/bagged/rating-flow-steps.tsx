@@ -99,7 +99,8 @@ export function SubcategoryStep({
     curatedLabel != null &&
     !showManualPicker &&
     subcategoryId === curatedSubcategoryId;
-  const showPicker = !curatedOnlySelection;
+  // Hide the picker while the suggestion loads so nobody ranks against the wrong list by tapping early.
+  const showPicker = !curatedLoading && !curatedOnlySelection;
 
   const chooseDifferentCategory = () => {
     setShowManualPicker(true);
@@ -120,7 +121,7 @@ export function SubcategoryStep({
         </View>
       ) : curatedLabel ? (
         <View style={styles.curatedConfirmBlock}>
-          <Text style={styles.stepHint}>From our catalog:</Text>
+          <Text style={styles.stepHint}>Suggested:</Text>
           <Pressable
             onPress={() => setSubcategoryId(curatedSubcategoryId!)}
             style={[styles.curatedConfirmBtn, canConfirmCurated && styles.curatedConfirmBtnActive]}>

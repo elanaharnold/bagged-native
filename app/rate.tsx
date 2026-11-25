@@ -65,6 +65,7 @@ import {
   searchRowIsAlreadyRanked,
   appendPostPhotoUrlsForUserPost,
   getPostPhotoUrlsForUserPost,
+  getRadarPostPhotoUrlsForProduct,
   normalizePhotoUrls,
   propagateProductMetadataFromRanking,
   setPostPhotoUrlsForUserPost,
@@ -115,7 +116,7 @@ import {
   useReviewPhotoPicker,
 } from '@/lib/review-photos';
 import { legacyCategoryForSubcategory, getSubcategory, mapLegacyCategoryToSubcategory, subcategoryForRow } from '@/constants/categories';
-import { productDetailParamsForSearchRow } from '@/lib/barcode';
+import { linkBarcodeToProduct, productDetailParamsForSearchRow } from '@/lib/barcode';
 import { useAuth } from '@/providers/auth-provider';
 
 type Step =
@@ -183,6 +184,7 @@ export default function RateScreen() {
     prefilledItem?: string;
     prefilledBrand?: string;
     prefilledCategory?: string;
+    prefilledSubcategory?: string;
     prefilledStores?: string;
     rerankPostId?: string;
     prefilledMacroCal?: string;
@@ -198,7 +200,17 @@ export default function RateScreen() {
     prefilledSource?: string;
     isWantToTry?: string;
     wantToTryRadarPostId?: string;
+    /**
+     * Set by the scanner's "Add it manually": the GTIN that found no match. Opens straight into
+     * manual add, and the barcode is linked to the product once it's saved to the catalog.
+     */
+    scanBarcode?: string;
+    /** Scanner manual add: what the user had typed in the no-match search. */
+    scanQuery?: string;
+    /** Scanner manual add: brand from a barcode database, when one had it. Editable. */
+    scanBrand?: string;
   }>();
+  const scanBarcode = /^\d{13}$/.test(String(params.scanBarcode ?? '')) ? String(params.scanBarcode) : null;
   const fromScan = params.prefilledSource === 'scan';
   const isWantToTryParam = params.isWantToTry === 'true';
   const wantToTryRadarPostIdParam = params.wantToTryRadarPostId ?? null;
@@ -206,6 +218,7 @@ export default function RateScreen() {
   const [step, setStep] = useState<Step>(() => {
     if (params.prefilledItem) return params.prefilledIntent === 'want' ? 'radar_confirm' : 'subcategory';
     if (params.rerankPostId) return 'vibe';
+    if (scanBarcode) return 'intent';
     // Fresh entry from the + button: search (or scan) first, then the product page.
     return 'search';
   });
@@ -239,10 +252,17 @@ export default function RateScreen() {
     return null;
   });
   const [subcategoryId, setSubcategoryId] = useState<string | null>(() => {
+    const ps = firstRouteParam(params.prefilledSubcategory);
+    if (ps && getSubcategory(ps)) return ps;
     const pc = firstRouteParam(params.prefilledCategory);
     if (pc) return mapLegacyCategoryToSubcategory(pc);
     return null;
   });
+  /** True while subcategoryId is only a guess from a legacy category (e.g. Snacks -> chips), not a real choice. */
+  const subcategoryIsLegacyGuessRef = useRef<boolean>(
+    !(firstRouteParam(params.prefilledSubcategory) && getSubcategory(firstRouteParam(params.prefilledSubcategory))) &&
+      Boolean(firstRouteParam(params.prefilledCategory))
+  );
   const [curatedSubcategoryId, setCuratedSubcategoryId] = useState<string | null>(null);
   const [curatedSubcategoryLoading, setCuratedSubcategoryLoading] = useState(false);
   const [vibe, setVibe] = useState<Vibe | null>(null);
@@ -292,7 +312,9 @@ export default function RateScreen() {
     );
 
   // ─── Search step ────────────────────────────────────────────────────────────
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(() =>
+    scanBarcode ? String(firstRouteParam(params.scanQuery) ?? '').trim() : ''
+  );
   const debouncedQuery = useDebounce(query, 350);
   const [results, setResults] = useState<SearchProductRow[]>([]);
   const [searching, setSearching] = useState(false);
@@ -333,7 +355,9 @@ export default function RateScreen() {
       .then((sub) => {
         if (cancelled) return;
         setCuratedSubcategoryId(sub);
-        if (sub && !subcategoryId) {
+        // The shared catalog wins over a default guessed from the parent category.
+        if (sub && (!subcategoryId || subcategoryIsLegacyGuessRef.current)) {
+          subcategoryIsLegacyGuessRef.current = false;
           setSubcategoryId(sub);
           setCategory(legacyCategoryForSubcategory(sub) as Category);
         }
@@ -881,13 +905,15 @@ export default function RateScreen() {
 
   const beginManualEntry = useCallback(() => {
     const name = query.trim();
-    if (!name) return;
+    // From the scanner the user may not have typed anything yet; they name it on the form.
+    if (!name && !scanBarcode) return;
+    const brand = scanBarcode ? String(firstRouteParam(params.scanBrand) ?? '').trim() : '';
     setErrorMsg(null);
     setManualCatalogNote(null);
     setSelected({
       name,
-      brand: '',
-      descriptionKey: productDescriptionKey(name, ''),
+      brand,
+      descriptionKey: productDescriptionKey(name, brand),
     });
     setCategory('Snacks');
     setSubcategoryId(null);
@@ -896,7 +922,7 @@ export default function RateScreen() {
     setMacros({ cal: '', protein: '', carbs: '', fat: '', servingLabel: '' });
     setResults([]);
     setStep('manual_entry');
-  }, [query, entryIntent]);
+  }, [query, entryIntent, scanBarcode, params.scanBrand]);
 
   /** From search with no intent yet: ask tried / want first, since the form differs. */
   const openManualEntry = useCallback(() => {
@@ -963,6 +989,7 @@ export default function RateScreen() {
     setManualSubmitting(true);
 
     let note = '';
+    let catalogSaved = false;
     try {
       const res = await insertCuratedProductStub(userId, {
         description: name,
@@ -985,12 +1012,41 @@ export default function RateScreen() {
               ? `Couldn't save to shared catalog: ${res.error.message}`
               : "Couldn't save to shared catalog.";
       } else if (res.duplicate) {
+        catalogSaved = true;
         note = 'This name is already in shared search.';
       } else {
+        catalogSaved = true;
         note = 'Saved to shared search.';
       }
     } catch {
       note = "Couldn't save to shared catalog.";
+    }
+
+    // Scanner manual add: the barcode only gets linked once the catalog row exists. If the save
+    // failed, stop here with an error so the user can retry, rather than carrying on unlinked.
+    if (scanBarcode) {
+      if (!catalogSaved) {
+        logEvent('scan_manual_add', { barcode_linked: false, reason: 'save_failed' });
+        setErrorMsg(note || "Couldn't save this product. Try again.");
+        setManualSubmitting(false);
+        return;
+      }
+      const link = await linkBarcodeToProduct({
+        gtin: scanBarcode,
+        row: {
+          description: name,
+          descriptionKey: productDescriptionKey(name, brand),
+          brandName: brand,
+          brandOwner: brand,
+          foodCategory: cat,
+        },
+        onlyIfUnlinked: true,
+      });
+      logEvent('scan_manual_add', {
+        barcode_linked: link === 'linked' || link === 'already_linked',
+        reason: link,
+        intent: entryIntent ?? undefined,
+      });
     }
 
     try {
@@ -1067,6 +1123,7 @@ export default function RateScreen() {
     selectedDietTags,
     entryIntent,
     checkDuplicateRank,
+    scanBarcode,
   ]);
 
   const pickFromSearch = useCallback(
@@ -1317,7 +1374,7 @@ export default function RateScreen() {
           item: selected.name,
           brand: selected.brand,
           store: selectedStores[0] ?? '',
-          category,
+          category: savedCategory,
           subcategory: subcategoryScope,
           vibe,
         };
@@ -1472,9 +1529,37 @@ export default function RateScreen() {
 
       let attachedPhotoUrls: string[] = [];
       const editingExistingPost = Boolean(rerankId || convertRadarPostId);
+
+      // Photos the user already added before ranking live on radar-only posts
+      // (want-to-try posts, or the stub "Add photos" creates). Those posts get
+      // deleted by removeWantToTryAfterRanking below, so carry their photos onto
+      // the ranked post first. Without this, ranking without picking photos
+      // again wiped them.
+      const carriedPhotoUrls =
+        postId != null
+          ? await getRadarPostPhotoUrlsForProduct(
+              userId,
+              {
+                item: selected.name,
+                descriptionKey: resolveProductDescriptionKey({
+                  item: selected.name,
+                  brand: selected.brand,
+                  descriptionKey: selected.descriptionKey,
+                }),
+              },
+              postId
+            ).catch(() => [] as string[])
+          : [];
+
       if (postId != null && editingExistingPost) {
         try {
-          let finalPhotoUrls = [...keptExistingPhotoUrls];
+          // Rerank: the screen loaded this post's photos, so the user's kept list is
+          // authoritative. Want-to-try conversion: the screen never loaded the radar
+          // post's photos, so start from what's saved on it instead of an empty list.
+          const baseExistingPhotoUrls = rerankId
+            ? keptExistingPhotoUrls
+            : await getPostPhotoUrlsForUserPost(userId, postId);
+          let finalPhotoUrls = [...new Set([...baseExistingPhotoUrls, ...carriedPhotoUrls])];
           if (reviewPhotos.length > 0) {
             const uploadAssets = reviewPhotosToUploadAssets(reviewPhotos);
             if (__DEV__) {
@@ -1490,9 +1575,11 @@ export default function RateScreen() {
             }
             finalPhotoUrls = [...finalPhotoUrls, ...uploaded].slice(0, MAX_REVIEW_PHOTOS);
           }
-          const removedUrls = initialExistingPhotoUrlsRef.current.filter(
-            (url) => !keptExistingPhotoUrls.includes(url)
-          );
+          const removedUrls = rerankId
+            ? initialExistingPhotoUrlsRef.current.filter(
+                (url) => !keptExistingPhotoUrls.includes(url)
+              )
+            : [];
           if (removedUrls.length > 0) {
             await removeStorageObjectsForPostPhotoUrls(removedUrls);
           }
@@ -1520,6 +1607,11 @@ export default function RateScreen() {
           attachedPhotoUrls = await getPostPhotoUrlsForUserPost(userId, postId).catch(() => []);
         }
       } else if (postId != null && reviewPhotos.length > 0) {
+        if (carriedPhotoUrls.length > 0) {
+          await appendPostPhotoUrlsForUserPost(userId, postId, carriedPhotoUrls).catch((err) => {
+            console.warn('[rate] could not carry over earlier photos', err);
+          });
+        }
         const uploadAssets = reviewPhotosToUploadAssets(reviewPhotos);
         try {
           if (__DEV__) {
@@ -1561,7 +1653,15 @@ export default function RateScreen() {
           );
         }
       } else if (postId != null) {
-        attachedPhotoUrls = await getPostPhotoUrlsForUserPost(userId, postId).catch(() => []);
+        if (carriedPhotoUrls.length > 0) {
+          attachedPhotoUrls = await appendPostPhotoUrlsForUserPost(
+            userId,
+            postId,
+            carriedPhotoUrls
+          ).catch(() => carriedPhotoUrls);
+        } else {
+          attachedPhotoUrls = await getPostPhotoUrlsForUserPost(userId, postId).catch(() => []);
+        }
       }
 
       const descKeyForSync = resolveProductDescriptionKey({
@@ -1703,6 +1803,7 @@ export default function RateScreen() {
             }
             subcategoryId={subcategoryId}
             onSelectSubcategory={(id) => {
+              subcategoryIsLegacyGuessRef.current = false;
               setSubcategoryId(id);
               setCategory(id ? (legacyCategoryForSubcategory(id) as Category) : null);
             }}
@@ -1738,6 +1839,7 @@ export default function RateScreen() {
             selected={selected}
             subcategoryId={subcategoryId}
             onSelectSubcategory={(id) => {
+              subcategoryIsLegacyGuessRef.current = false;
               setSubcategoryId(id);
               setCategory(id ? (legacyCategoryForSubcategory(id) as Category) : null);
             }}
@@ -1765,6 +1867,7 @@ export default function RateScreen() {
             selected={selected}
             subcategoryId={subcategoryId}
             setSubcategoryId={(id) => {
+              subcategoryIsLegacyGuessRef.current = false;
               setSubcategoryId(id);
               setCategory(id ? (legacyCategoryForSubcategory(id) as Category) : null);
             }}

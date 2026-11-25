@@ -87,6 +87,8 @@ export type FeedPostRow = {
   vibe?: string | null;
   photo_urls?: string[] | null;
   radar_only?: boolean | null;
+  /** Set when the post moved subcategory and the owner still needs to re-rank it. */
+  needs_recategorization?: boolean | null;
   created_at?: string | null;
   /** When set (e.g. after re-rank), used with `created_at` for feed ordering. */
   updated_at?: string | null;
@@ -2621,6 +2623,59 @@ export async function appendPostPhotoUrlsForUserPost(
   return merged;
 }
 
+/**
+ * Photo URLs on the user's radar-only posts for a product (want-to-try posts and the
+ * photo stubs made by "Add photos" before ranking). Ranking deletes those posts, so
+ * callers carry these URLs onto the ranked post first. Read-only; best-effort.
+ */
+export async function getRadarPostPhotoUrlsForProduct(
+  userId: string,
+  args: { item: string; descriptionKey?: string | null },
+  excludePostId?: string | number | null
+): Promise<string[]> {
+  const item = String(args.item ?? '').trim();
+  const key = String(args.descriptionKey ?? '').trim();
+  if (!userId || (!item && !key)) return [];
+  const exclude = excludePostId != null ? String(excludePostId) : null;
+  const queries = [];
+  if (key) {
+    queries.push(
+      supabase
+        .from('posts')
+        .select('id, photo_urls, created_at')
+        .eq('user_id', userId)
+        .eq('radar_only', true)
+        .eq('description_key', key)
+    );
+  }
+  if (item) {
+    queries.push(
+      supabase
+        .from('posts')
+        .select('id, photo_urls, created_at')
+        .eq('user_id', userId)
+        .eq('radar_only', true)
+        .eq('item', item)
+    );
+  }
+  const results = await Promise.all(queries);
+  const byId = new Map<string, { photo_urls?: unknown; created_at?: string | null }>();
+  for (const res of results) {
+    if (res.error) {
+      console.warn('getRadarPostPhotoUrlsForProduct:', res.error.message);
+      continue;
+    }
+    for (const row of res.data ?? []) {
+      const id = String((row as { id: unknown }).id);
+      if (id !== exclude) byId.set(id, row as { photo_urls?: unknown; created_at?: string | null });
+    }
+  }
+  const rows = [...byId.values()].sort(
+    (a, b) => new Date(a.created_at ?? 0).getTime() - new Date(b.created_at ?? 0).getTime()
+  );
+  return [...new Set(rows.flatMap((r) => normalizePhotoUrls(r.photo_urls)))];
+}
+
 const ADMIN_PRODUCT_PHOTO_STUB_RANK = 99_999;
 
 /**
@@ -3171,19 +3226,32 @@ export async function fetchCuratedSubcategoryForProduct(
   const fromRow = String((row as { subcategory?: string | null } | null)?.subcategory ?? '').trim();
   if (fromRow) return fromRow;
   const key = String(descriptionKey ?? '').trim();
-  if (!key) return null;
-  const { data, error } = await supabase
-    .from('curated_products')
-    .select('subcategory')
-    .eq('description_key', key)
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    console.warn('fetchCuratedSubcategoryForProduct:', error.message);
+  if (key) {
+    const { data, error } = await supabase
+      .from('curated_products')
+      .select('subcategory')
+      .eq('description_key', key)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('fetchCuratedSubcategoryForProduct:', error.message);
+    } else {
+      const sub = String(data?.subcategory ?? '').trim();
+      if (sub && getSubcategory(sub)) return sub;
+    }
+  }
+  // Not in the catalog yet: ask the server for a confident guess (e.g. the brand's usual subcategory).
+  const { data: resolved, error: resolveErr } = await supabase.rpc('resolve_product_category', {
+    p_item: String(item ?? '').trim(),
+    p_brand: String(brand ?? '').trim() || null,
+    p_description_key: key || null,
+  });
+  if (resolveErr) {
+    console.warn('resolve_product_category:', resolveErr.message);
     return null;
   }
-  const sub = String(data?.subcategory ?? '').trim();
-  return sub || null;
+  const guessed = String((resolved as { subcategory?: string | null } | null)?.subcategory ?? '').trim();
+  return guessed && getSubcategory(guessed) ? guessed : null;
 }
 
 /** Persist catalog subcategory onto ranked posts when posts still carry a migration default. */
@@ -4411,29 +4479,105 @@ function curatedRowToSearchProductRow(row: CuratedProductRow): SearchProductRow 
   };
 }
 
-/** Official curated products table — same ILIKE strategy as the web app. */
-export async function fetchCuratedProductsForSearch(query: string): Promise<SearchProductRow[]> {
+// ─── Word-by-word search helpers (match the `search_products` database function) ─
+
+function searchNorm(value: string): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function searchStem(word: string): string {
+  if (/ies$/.test(word) && word.length > 4) return word.replace(/ies$/, 'y');
+  if (/[^s]s$/.test(word) && word.length > 3) return word.slice(0, -1);
+  return word;
+}
+
+function searchQueryStems(query: string): string[] {
+  return [
+    ...new Set(
+      searchNorm(query)
+        .split(' ')
+        .filter((w) => w.length >= 2)
+        .map(searchStem)
+    ),
+  ];
+}
+
+function matchesEveryQueryWord(stems: string[], brand: string, description: string): boolean {
+  if (stems.length === 0) return false;
+  const hay = searchNorm(`${brand} ${description}`);
+  return stems.every((stem) => hay.includes(stem));
+}
+
+/**
+ * Curated rows keep the database's relevance order. Rows that contain every word
+ * of the query come first (curated, then API), then partial / typo matches.
+ */
+function mergeCuratedFirstByStrength<T>(
+  query: string,
+  curated: T[],
+  api: T[],
+  text: (row: T) => [brand: string, description: string]
+): T[] {
+  const stems = searchQueryStems(query);
+  const strong = (row: T) => {
+    const [brand, description] = text(row);
+    return matchesEveryQueryWord(stems, brand, description);
+  };
+  return [
+    ...curated.filter(strong),
+    ...api.filter(strong),
+    ...curated.filter((r) => !strong(r)),
+    ...api.filter((r) => !strong(r)),
+  ];
+}
+
+/** Old phrase-only ILIKE search; used only if the `search_products` RPC is unavailable. */
+async function fetchCuratedRowsByIlikeFallback(query: string): Promise<CuratedProductRow[]> {
   const phrases = curatedSearchPhrases(query);
-  if (phrases.length === 0) return [];
-
-  const rowsByKey = new Map<string, CuratedProductRow>();
-
+  const out: CuratedProductRow[] = [];
   for (const phrase of phrases) {
     const cleaned = phrase.replace(/[().,]/g, ' ').trim();
     const safe = escapeIlikePattern(cleaned);
     const orFilter = `description.ilike.%${safe}%,brand.ilike.%${safe}%`;
     const { data, error } = await supabase.from('curated_products').select('*').or(orFilter).limit(25);
     if (error) {
-      console.warn('fetchCuratedProductsForSearch:', error.message);
+      console.warn('fetchCuratedRowsByIlikeFallback:', error.message);
       continue;
     }
-    for (const row of data ?? []) {
-      const r = row as CuratedProductRow;
-      const keyRaw = r.description_key != null ? String(r.description_key).trim() : '';
-      const key = keyRaw || normalizedDescriptionKeyFromItem(String(r.description ?? ''));
-      if (!key || rowsByKey.has(key)) continue;
-      rowsByKey.set(key, r);
-    }
+    out.push(...((data ?? []) as CuratedProductRow[]));
+  }
+  return out;
+}
+
+/**
+ * Ranked catalog search: matches each word separately (brand + product name),
+ * ignores apostrophes and plurals, tolerates small typos. Rows come back best first.
+ */
+async function fetchCuratedSearchRows(query: string, limit = 40): Promise<CuratedProductRow[]> {
+  const q = String(query ?? '').trim();
+  if (q.length < 2) return [];
+  const { data, error } = await supabase.rpc('search_products', { p_query: q, p_limit: limit });
+  if (!error) return (data ?? []) as CuratedProductRow[];
+  console.warn('search_products rpc failed, using ILIKE fallback:', error.message);
+  return fetchCuratedRowsByIlikeFallback(q);
+}
+
+/** Official curated products table, ranked best match first. */
+export async function fetchCuratedProductsForSearch(query: string): Promise<SearchProductRow[]> {
+  const rows = await fetchCuratedSearchRows(query);
+  if (rows.length === 0) return [];
+
+  const rowsByKey = new Map<string, CuratedProductRow>();
+
+  for (const r of rows) {
+    const keyRaw = r.description_key != null ? String(r.description_key).trim() : '';
+    const key = keyRaw || normalizedDescriptionKeyFromItem(String(r.description ?? ''));
+    if (!key || rowsByKey.has(key)) continue;
+    rowsByKey.set(key, r);
   }
 
   return [...rowsByKey.values()].map(curatedRowToSearchProductRow);
@@ -4627,8 +4771,18 @@ export async function searchProducts(query: string): Promise<SearchProductRow[]>
         return [];
       }),
     ]);
-    const merged = dedupeSearchProductsByDescription([...curatedProducts, ...apiProducts]);
-    return rankSearchRowsForQuery(q, merged).slice(0, SEARCH_MERGE_MAX);
+    const curatedUnique = dedupeSearchProductsByDescription(curatedProducts);
+    const curatedKeys = new Set(
+      curatedUnique.map((p) => normalizedDescriptionKeyFromItem(p.description))
+    );
+    const apiOnly = dedupeSearchProductsByDescription(apiProducts).filter(
+      (p) => !curatedKeys.has(normalizedDescriptionKeyFromItem(p.description))
+    );
+    const apiRanked = rankSearchRowsForQuery(q, apiOnly);
+    return mergeCuratedFirstByStrength(q, curatedUnique, apiRanked, (r) => [
+      searchRowBrand(r),
+      r.description,
+    ]).slice(0, SEARCH_MERGE_MAX);
   } catch (err) {
     console.warn('searchProducts failed:', err);
     return [];
@@ -7642,38 +7796,16 @@ export async function fetchDiscoverExploreSearch(args: {
     });
   }
 
-  const merged = [...curated, ...apiMapped];
-  const hasNarrowFilter = Boolean(storeFilter || dietFilter || categoryFilter);
-
-  // Stable, query-aware sort: curated boost + startsWith > includes > brand match.
-  const qn = q.toLowerCase();
-  const scored = merged.map((row, idx) => {
-    const desc = row.description.toLowerCase();
-    const brand = (row.brandOwner || row.brandName || '').toLowerCase();
-    let score = 0;
-    if (desc === qn) score += 500;
-    if (desc.startsWith(qn)) score += 260;
-    if (desc.includes(qn)) score += 160;
-    if (brand.startsWith(qn)) score += 90;
-    if (brand.includes(qn)) score += 60;
-    if (curatedKeys.has(row.descriptionKey)) score += 30; // prefer curated
-    return { row, idx, score };
-  });
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    if (a.row.description.length !== b.row.description.length) {
-      return a.row.description.length - b.row.description.length;
-    }
-    return a.idx - b.idx;
-  });
-  const ranked = scored.map((s) => s.row);
+  // Curated rows arrive best match first from `search_products`; API rows go after
+  // curated rows of the same strength (all words matched vs partial).
+  const ranked = mergeCuratedFirstByStrength(q, curated, apiMapped, (row) => [
+    row.brandOwner || row.brandName || '',
+    row.description,
+  ]);
   const storeFiltered = storeFilter
     ? ranked.filter((row) => discoverExploreRowMatchesStore(row, storeFilter))
     : ranked;
   const withStats = await attachDiscoverAvgRatings(storeFiltered);
-  if (hasNarrowFilter) {
-    return sortDiscoverExploreRowsByRank(withStats).slice(0, limit);
-  }
   return withStats.slice(0, limit);
 }
 
@@ -7702,18 +7834,23 @@ export async function fetchDiscoverExploreCurated(args: {
   const fetchCap = storeFilter
     ? Math.min(Math.max(limit * 8, 240), 1000)
     : Math.min(Math.max(limit * 2, 120), 1000);
-  let req = supabase.from('curated_products').select('*').limit(fetchCap);
-  if (dietFilter) req = req.contains('diet_tags', [dietFilter]);
+  let data: Record<string, unknown>[] | null = null;
   if (q.length >= 2) {
-    const cleaned = q.replace(/[().,]/g, ' ').trim();
-    const safe = escapeIlikePattern(cleaned);
-    req = req.or(`description.ilike.%${safe}%,brand.ilike.%${safe}%`);
-  }
-
-  const { data, error } = await req;
-  if (error) {
-    console.warn('fetchDiscoverExploreCurated:', error.message);
-    return [];
+    const ranked = await fetchCuratedSearchRows(q, 200);
+    data = dietFilter
+      ? ranked.filter(
+          (r) => Array.isArray(r.diet_tags) && (r.diet_tags as unknown[]).includes(dietFilter)
+        )
+      : ranked;
+  } else {
+    let req = supabase.from('curated_products').select('*').limit(fetchCap);
+    if (dietFilter) req = req.contains('diet_tags', [dietFilter]);
+    const res = await req;
+    if (res.error) {
+      console.warn('fetchDiscoverExploreCurated:', res.error.message);
+      return [];
+    }
+    data = (res.data ?? []) as Record<string, unknown>[];
   }
 
   const deduped = dedupeCuratedRecordsForDiscover(
@@ -7742,7 +7879,9 @@ export async function fetchDiscoverExploreCurated(args: {
     );
   }
   const withStats = await attachDiscoverAvgRatings(mapped);
-  const hasNarrowFilter = Boolean(storeFilter || dietFilter || categoryFilter || q.length >= 2);
+  // With a search query, keep relevance order from `search_products`.
+  if (q.length >= 2) return withStats.slice(0, limit);
+  const hasNarrowFilter = Boolean(storeFilter || dietFilter || categoryFilter);
   if (hasNarrowFilter) {
     return sortDiscoverExploreRowsByRank(withStats).slice(0, limit);
   }

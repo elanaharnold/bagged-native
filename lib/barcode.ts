@@ -536,20 +536,70 @@ export async function lookupBarcode(scan: ScannedBarcode): Promise<BarcodeLookup
 
 // ─── Linking + hand-off to the rate flow ──────────────────────────────────────
 
+export type BarcodeLinkResult =
+  /** A new barcode → product link was written. */
+  | 'linked'
+  /** This barcode already points at this same product; nothing to write. */
+  | 'already_linked'
+  /** onlyIfUnlinked: the barcode already points at a different product, so we left it alone. */
+  | 'linked_elsewhere'
+  | 'failed';
+
+/**
+ * The description_keys this barcode already resolves to (catalog barcode/upc columns plus
+ * community links). Throws on lookup errors so callers can refuse to write blind.
+ */
+async function existingKeysForBarcode(gtin: string): Promise<string[]> {
+  const candidates = normalizeScan(gtin)?.candidates ?? [gtin];
+  const keys = new Set<string>();
+  const catalog = await lookupCuratedByBarcode(candidates);
+  const catalogKey = cleanText(catalog?.row.descriptionKey).toLowerCase();
+  if (catalogKey) keys.add(catalogKey);
+  const { data, error } = await supabase
+    .from('product_barcodes')
+    .select('description_key')
+    .in('barcode', candidates)
+    .limit(50);
+  if (error) throw error;
+  for (const r of (data ?? []) as { description_key: string }[]) {
+    const k = cleanText(r.description_key).toLowerCase();
+    if (k) keys.add(k);
+  }
+  return [...keys];
+}
+
 /**
  * Remember that this barcode is this product, so the next person who scans it
  * gets an instant match. Best-effort: never throws, duplicates are ignored.
+ *
+ * onlyIfUnlinked: used by manual add from the scanner. If someone linked this barcode to a
+ * different product in the meantime, keep that link instead of adding a competing one.
  */
 export async function linkBarcodeToProduct(args: {
   gtin: string;
   row: SearchProductRow;
-}): Promise<boolean> {
+  onlyIfUnlinked?: boolean;
+}): Promise<BarcodeLinkResult> {
   const item = cleanText(args.row.description).slice(0, 200);
   const brand = cleanText(searchRowBrand(args.row)).slice(0, 100);
-  if (!item) return false;
+  if (!item) return 'failed';
   const descriptionKey =
     cleanText(args.row.descriptionKey) || productDescriptionKey(item, brand);
-  if (!descriptionKey) return false;
+  if (!descriptionKey) return 'failed';
+
+  if (args.onlyIfUnlinked) {
+    try {
+      const existing = await existingKeysForBarcode(args.gtin);
+      if (existing.length > 0) {
+        const ours = descriptionKey.toLowerCase();
+        const canonical = (await resolveCanonicalDescriptionKey(descriptionKey)).toLowerCase();
+        return existing.some((k) => k === ours || k === canonical) ? 'already_linked' : 'linked_elsewhere';
+      }
+    } catch (err) {
+      if (__DEV__) console.warn('linkBarcodeToProduct (existing check):', err);
+      return 'failed';
+    }
+  }
 
   const { error } = await supabase.from('product_barcodes').insert({
     barcode: args.gtin,
@@ -557,11 +607,12 @@ export async function linkBarcodeToProduct(args: {
     item,
     brand,
   });
-  if (error && error.code !== '23505') {
+  if (error) {
+    if (error.code === '23505') return 'already_linked';
     if (__DEV__) console.warn('linkBarcodeToProduct:', error.message);
-    return false;
+    return 'failed';
   }
-  return true;
+  return 'linked';
 }
 
 /** Route params that open the rate flow already pointed at this product. */
